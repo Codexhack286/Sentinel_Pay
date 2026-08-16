@@ -3,7 +3,7 @@ Verifies that rapid or cumulative payments exceeding the daily limit are rejecte
 """
 
 from sentinelpay.intent.models import PaymentIntent
-from sentinelpay.policy.models import AgentPolicy, PolicyDecision
+from sentinelpay.policy.models import AgentPolicy
 from sentinelpay.gateway.middleware import SentinelPayGateway
 from sentinelpay.verifier.verifier import LocalSemanticVerifier
 

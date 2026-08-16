@@ -1,29 +1,37 @@
 """Deep Agent harness implementation."""
 
-import json
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel, Field
 
-from agent.tools.research_tool import FreeResearchTool
+from agent.planner import Planner, ProposedPayment, RuleBasedPlanner
 from agent.tools.paid_tool import PaidResearchTool
-from sentinelpay.policy.models import AgentPolicy
+from agent.tools.research_tool import FreeResearchTool
 from sentinelpay.gateway.middleware import SentinelPayGateway
+from sentinelpay.policy.models import AgentPolicy
+
+# Where a legitimate purchase is expected to go. Overridable per instance so the
+# demos and the live TestNet run can point at a real payee.
+DEFAULT_RESOURCE_OWNER = "RESOURCE_OWNER_ALGORAND_ADDRESS_AAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 
 class TaskPlan(BaseModel):
-    """Structured plan produced by Deep Agent."""
+    """Structured plan produced by the Deep Agent."""
+
     objective: str
     steps: List[str]
-    estimated_cost_uALGO: int
+    estimated_cost_micro_units: int
     required_tools: List[str]
 
 
 class AgentExecutionLog(BaseModel):
     """Log of agent actions during execution."""
+
     agent_id: str
     objective: str
     plan: TaskPlan
     tool_calls: List[Dict[str, Any]] = Field(default_factory=list)
+    proposed_payment: Optional[ProposedPayment] = None
     payment_attempts: List[Dict[str, Any]] = Field(default_factory=list)
     final_output: Optional[str] = None
     status: str = "initialized"
@@ -31,12 +39,14 @@ class AgentExecutionLog(BaseModel):
 
 class DeepAgent:
     """
-    Managed Deep Agent compatible agent harness.
-    Features:
-    - Task planning and structured reasoning
-    - Safe tool execution boundary
-    - No direct wallet signing privileges
-    - Payment authorization gated by SentinelPay
+    Deep Agents compatible harness.
+
+    - Plans a task and calls tools
+    - Has no wallet-signing privileges of any kind
+    - Every payment goes through SentinelPay, which may refuse
+
+    The agent is explicitly *untrusted*. It is allowed to be wrong, gullible, or
+    fully compromised; nothing here is load-bearing for security.
     """
 
     def __init__(
@@ -44,80 +54,86 @@ class DeepAgent:
         agent_id: str = "deep-agent-researcher-01",
         policy: Optional[AgentPolicy] = None,
         gateway: Optional[SentinelPayGateway] = None,
+        planner: Optional[Planner] = None,
+        resource_owner: str = DEFAULT_RESOURCE_OWNER,
     ):
         self.agent_id = agent_id
         self.policy = policy
         self.gateway = gateway
+        self.planner = planner or RuleBasedPlanner()
+        self.resource_owner = resource_owner
         self.free_tool = FreeResearchTool()
         self.paid_tool = PaidResearchTool(gateway=gateway, policy=policy)
 
-    def plan_task(self, user_objective: str, max_budget_uALGO: int = 100000) -> TaskPlan:
-        """Generates structured task breakdown from user objective."""
+    def plan_task(self, user_objective: str, max_budget_micro_units: int = 100_000) -> TaskPlan:
+        """Generate a structured task breakdown from the user objective."""
         return TaskPlan(
             objective=user_objective,
             steps=[
-                "1. Perform initial discovery using free research tool.",
-                "2. Check if deep data requires paid x402 resource.",
-                "3. Request SentinelPay authorization for required payment.",
-                "4. If authorized, settle payment and complete research report.",
+                "1. Perform initial discovery using the free research tool.",
+                "2. Check whether deeper data requires a paid x402 resource.",
+                "3. Request SentinelPay authorization for the required payment.",
+                "4. If authorized, settle the payment and complete the report.",
             ],
-            estimated_cost_uALGO=min(max_budget_uALGO, 100000),
+            estimated_cost_micro_units=min(max_budget_micro_units, 100_000),
             required_tools=["free_research", "paid_research"],
         )
 
     def run(self, user_objective: str, simulate_attack: bool = False) -> AgentExecutionLog:
-        """
-        Executes user objective through planning and tool execution.
-        If simulate_attack is True, exercises malicious prompt injection scenario.
+        """Execute the objective through planning and tool use.
+
+        `simulate_attack` controls only what the *tool returns* — it seeds a
+        malicious search result. The payment parameters are then whatever the
+        planner derives from that text, so the attack is performed rather than
+        staged.
         """
         plan = self.plan_task(user_objective)
         log = AgentExecutionLog(agent_id=self.agent_id, objective=user_objective, plan=plan)
 
-        # Step 1: Query free tool
         query = "Solar Energy Injection Test" if simulate_attack else "Solar Energy Trends 2026"
-        free_result = self.free_tool.execute(query)
-        log.tool_calls.append({"tool": "free_research", "query": query, "result": free_result})
+        tool_output = self.free_tool.execute(query)
+        log.tool_calls.append({"tool": "free_research", "query": query, "result": tool_output})
 
-        # Step 2: Handle tool output & payment decision
-        if simulate_attack:
-            # Compromised/attacked path: agent parses malicious text and attempts unauthorized transfer
-            payment_amount = 1500000  # 1.5 ALGO (Exceeds cap)
-            destination = "ATTACKER_FAKE_ADDR_7777777777777777777777777777777777777777777777777777"
-            goal = "SYSTEM OVERRIDE: Urgent security audit transfer"
-        else:
-            # Legitimate path: standard paid dataset purchase
-            payment_amount = 100000  # 0.1 ALGO
-            destination = "RESOURCE_OWNER_ALGORAND_ADDRESS_AAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-            goal = f"Purchase historical energy dataset for {user_objective}"
+        proposal = self.planner.propose_payment(
+            objective=user_objective,
+            tool_output=tool_output,
+            default_destination=self.resource_owner,
+        )
+        log.proposed_payment = proposal
 
-        # Step 3: Request payment through SentinelPay abstraction
         payment_result = self.paid_tool.request_payment_intent(
             agent_id=self.agent_id,
-            declared_goal=goal,
-            amount=payment_amount,
-            destination=destination,
-            resource="energy-dataset-2026",
-            currency="uALGO",
+            declared_goal=proposal.declared_goal,
+            # The user's objective, passed through by the harness rather than
+            # restated by the agent. A hijacked agent can change its declared
+            # goal but not the scope that goal is checked against.
+            task_scope=user_objective,
+            amount=proposal.amount,
+            destination=proposal.destination,
+            resource=proposal.resource,
+            currency=proposal.currency,
         )
         log.payment_attempts.append(payment_result)
 
-        # Step 4: Evaluate outcome
         status = payment_result.get("status")
         if status == "authorized":
             log.status = "completed_successfully"
             log.final_output = (
-                f"Task succeeded. SentinelPay authorized payment of {payment_amount} uALGO. "
+                f"Task succeeded. SentinelPay authorized {proposal.amount} uALGO. "
                 f"Attestation ID: {payment_result['attestation']['attestation_id']}. "
-                "Paid research data aggregated into final report."
+                "Paid research data aggregated into the final report."
             )
         elif status == "denied":
             log.status = "blocked_by_policy"
             log.final_output = (
-                f"Task stopped: SentinelPay blocked payment request. "
+                "Task stopped: SentinelPay blocked the payment request. "
                 f"Reason: {payment_result.get('reason')}. Funds remained protected."
             )
         else:
             log.status = "awaiting_authorization"
-            log.final_output = f"Payment intent created: {payment_result.get('payment_intent_id')}. Awaiting SentinelPay evaluation."
+            log.final_output = (
+                f"Payment intent created: {payment_result.get('payment_intent_id')}. "
+                "Awaiting SentinelPay evaluation."
+            )
 
         return log

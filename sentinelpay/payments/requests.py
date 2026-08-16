@@ -1,16 +1,19 @@
 """Payment request models."""
 
-from typing import Optional, Dict, Any
+from typing import Optional
+
 from pydantic import BaseModel, Field
+
 from sentinelpay.verifier.attestation import Attestation
 
 
 class PaymentRequirement(BaseModel):
     """Payment requirements returned by an x402 paid resource."""
+
     scheme: str = "algorand"
     network: str = "testnet"
     asset: str = "uALGO"
-    amount: int
+    amount: int = Field(..., gt=0, description="Price in micro-units. Must be positive.")
     pay_to: str
     resource_id: str
     description: Optional[str] = None

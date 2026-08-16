@@ -1,129 +1,210 @@
-# SentinelPay Project Status, Pending Tasks & Refinement Roadmap
+# SentinelPay — Status, Pending Tasks & Roadmap
 
-**Current Version**: `0.3.0-beta`  
-**Last Updated**: August 14, 2026 — Live TestNet Deployment ✅  
+**Current Version**: `0.4.0`
+**Last Updated**: August 17, 2026 — security review and authorization-binding fix
 **Repository**: [https://github.com/Codexhack286/Sentinel_Pay](https://github.com/Codexhack286/Sentinel_Pay)
 
 ---
 
 ## 1. Executive Summary
 
-SentinelPay is an authorization and policy-enforcement layer for autonomous AI-agent payments in x402 ecosystems. It prevents prompt-injection hijacking, runaway spending, and unauthorized transfers by ensuring that all agent-initiated payments must pass deterministic policy checks and verifier attestation before being executed in an Algorand smart contract atomic group.
+SentinelPay is an authorization and policy-enforcement layer for autonomous
+AI-agent payments in x402 ecosystems. Every agent-initiated payment must pass
+deterministic policy checks and verifier attestation, and the resulting signed
+authorization must be accepted by an Algorand contract in the same atomic group
+as the payment.
 
-**Current State**: Full local architecture, agent runtime, security engine, reference contract logic, **real deployable PyTeal contract**, attack testing matrix, and demo flows are **100% operational and verified (61/61 tests passing)**. The **SentinelPay smart contract is live on Algorand TestNet** (App ID: `769239295`) with the verifier public key and admin address baked into on-chain global state.
+**Current state**: engine, agent runtime, contract (both the deployable PyTeal
+program and the reference model), services, adversarial test matrix and demo
+flows are implemented and green — **153/153 tests passing**, all offline.
 
----
-
-## 2. Completed Milestones ✅
-
-### Phase 0: Repository Scaffolding & Tooling
-- [x] Initialized uv-managed Python environment (`pyproject.toml`, `uv.lock`).
-- [x] Configured zero-paid dependency baseline (`pydantic`, `fastapi`, `cryptography`, `py-algorand-sdk`, `pytest`).
-- [x] Implemented environment security isolation (`.gitignore`, `.env.example`).
-- [x] Set up Git version control and established remote repository on GitHub.
-
-### Core SentinelPay Engine (`sentinelpay/`)
-- [x] **Intent Normalization & Hashing** (`sentinelpay/intent/`): Normalizes raw agent proposals into canonical form, discards unverified payloads, and generates deterministic SHA-256 intent hashes.
-- [x] **Deterministic Policy Engine** (`sentinelpay/policy/`): Enforces hard per-transaction caps, daily cumulative spend limits, tool allowlists, destination allowlists, currency checks, and expiration windows.
-- [x] **Attestation & Cryptographic Signer** (`sentinelpay/verifier/`): Implemented Ed25519 digital signature signing and verification for authorization objects.
-- [x] **Local Verifier** (`sentinelpay/verifier/verifier.py`): Zero-cost local task alignment and prompt-injection keyword filtering.
-- [x] **Gateway Middleware** (`sentinelpay/gateway/middleware.py`): Orchestrates normalization, policy checks, verification, and attestation issuance.
-- [x] **x402 Protocol Handler** (`sentinelpay/payments/x402.py`): Parses HTTP 402 challenges and constructs/verifies `SentinelPay-AVM` payment proofs.
-
-### Agent Subsystem (`agent/`)
-- [x] **DeepAgent Harness** (`agent/agent.py`): Autonomous task planning, tool delegation, and safe execution boundaries without direct wallet-signing privileges.
-- [x] **Tool Boundaries** (`agent/tools/`): Separated unpriced discovery tools (`free_research`) from SentinelPay-gated tools (`paid_research`).
-- [x] **Skills & Subagent Specs** (`agent/skills/`, `agent/subagents/`): Guidelines preventing obedience to text-based overrides and defining researcher delegation.
-
-### Smart Contracts & Deployment (`contracts/`, `scripts/`)
-- [x] **AVM Validation Logic** (`contracts/sentinelpay.py`): Reference logic for atomic group validation, signature checks, nonce consumption, and spend caps.
-- [x] **Real PyTeal Contract** (`contracts/pyteal_contract.py`): Deployable AVM v8 program with **Box storage** for on-chain nonce replay protection.
-- [x] **Compilation Pipeline** (`contracts/compile.py`): Generates `contracts/build/approval.teal` and `clear.teal`.
-- [x] **TestNet Contract Deployed**: Deployed to Algorand TestNet at **App ID: `769239295`**.
-- [x] **Budget Helper Deployed**: Deployed helper app for opcode pooling to satisfy `ed25519verify_bare` requirements.
-
-### Services & API (`services/`)
-- [x] **x402 Resource Endpoint** (`services/api/app.py`): FastAPI server returning HTTP 402 challenge and serving protected dataset upon receiving valid SentinelPay settlement proof.
-- [x] **Standalone Verifier Node** (`services/verifier/app.py`): REST endpoint for policy evaluation and attestation signing.
-
-### Facilitator Client (`sentinelpay/payments/facilitator.py`)
-- [x] **GoPlausible Client**: Implemented client for `/verify`, `/settle`, `/health`, and `/supported`.
-- [x] **Smoke Test Passed**: Verified live connection to GoPlausible facilitator and confirmed Algorand TestNet support.
-
-### Adversarial & Test Suite — 61/61 Tests Passing
-- [x] Unit tests for policy, intent, attestation, verifier, x402 handler, gateway, verifier REST service, and facilitator payload shaping.
-- [x] Integration tests for the complete x402 payment flow.
-- [x] 4 Adversarial attack tests: Prompt injection (Attack A), Verifier bypass (Attack B), Nonce replay (Attack C), Spend cap overrun (Attack D).
-- [x] Contract compilation and invariant tests.
+A security review found the previously deployed contract did not bind the
+enforced fields to the signed attestation. **Fixed, redeployed, and verified
+live** — app `769368669`. Every attack class is now rejected by the contract
+itself, at a named opcode. See section 2.
 
 ---
 
-## 3. Pending Implementation & Execution Tasks 📋
+## 2. Security Fix — Authorization Binding (resolved and verified on-chain)
 
-```text
-Local Architecture (Done) ──► TestNet Contract Deployed (Done) ──► Live Broadcast ──► Facilitator Roundtrip ──► MainNet & Pitch
+### What was wrong
+
+`validate_and_pay` took six application arguments:
+
+```
+args[0] selector   args[1] signed blob   args[2] signature
+args[3] destination   args[4] amount   args[5] nonce
 ```
 
-### Task 1: Live On-Chain Broadcast Execution
-- [ ] **Box MBR Funding**: Execute `scripts/fund_app_mbr.py` to deposit 0.5 ALGO MBR into the SentinelPay contract account (`SENTINELPAY_APP_ID=769239295`) for Box storage allocation.
-- [ ] **Live Atomic Broadcast**: Run `scripts/live_broadcast.py` to broadcast a real `[Payment + SentinelPay validate_and_pay App Call]` atomic group to Algorand TestNet.
-- [ ] **Capture On-Chain Tx Proofs**: Record confirmed transaction IDs and Pera Explorer links.
+It verified the Ed25519 signature over `args[1]`, then compared `args[3]` and
+`args[4]` against `gtxn[0]`. Nothing tied `args[3..5]` to `args[1]`. An attacker
+holding any single genuine attestation could therefore submit:
 
-### Task 2: Live x402 Facilitator Roundtrip
-- [ ] **Full Loop Settlement**: Connect `services/api/app.py` with `sentinelpay/payments/facilitator.py` so the resource server validates payment proofs directly via the GoPlausible facilitator on TestNet.
-- [ ] **Facilitator Fallback Handling**: Implement seamless fallback to direct algod verification if the external facilitator experiences transient downtime.
+- `args[1..2]` — the real, correctly signed authorization (signature passes)
+- `args[3]` — their own address
+- `args[4]` — any amount up to the spend cap
+- `args[5]` — a fresh nonce, so the replay check passes too
+
+and every remaining assert compared attacker input against attacker input. One
+0.1 ALGO authorization was effectively a bearer token for the entire spend cap.
+The contract also never checked expiry, `CloseRemainderTo` or `RekeyTo`.
+
+### The fix
+
+The contract now takes **three** arguments and reads destination, amount, nonce
+and expiry out of the signed bytes themselves, at fixed offsets in a 120-byte
+blob (`Attestation.avm_signing_bytes()`, layout in `docs/protocol.md` §3.2).
+There is no unsigned field left to substitute. Added alongside it: blob length
+and magic checks, signature length check, expiry check against
+`Global.LatestTimestamp`, and rejection of `CloseRemainderTo` / `RekeyTo` on both
+the payment and the app call.
+
+`contracts/tests/test_reference_model.py` pins every one of those attacks, and
+`scripts/verify_attack.py --broadcast` demonstrates the same rejections against
+live TestNet.
+
+### Verified on TestNet
+
+- [x] Recompiled and redeployed — app **`769368669`**, budget helper **`769368677`**
+- [x] App account funded for nonce-box MBR (0.3 ALGO)
+- [x] Legitimate settlement confirmed — [`7KRNWCNN...`](https://testnet.explorer.perawallet.app/tx/7KRNWCNNGUOZKEPOVZD3H4GYQWBOF6WGSN45XUZESB74OOKFDJRA), round 66376855
+- [x] `verify_attack.py --broadcast` — all 5 attack classes rejected **by the
+      contract**, each at a named opcode:
+
+  | Attack | Rejection |
+  |---|---|
+  | Amount substitution | `pc=263  load 0; ==; assert` |
+  | Destination substitution | `pc=256  extract 8 32; ==; assert` |
+  | Blob tampering | `pc=229  ed25519verify_bare; assert` |
+  | Forged signature | `pc=229  ed25519verify_bare; assert` |
+  | Replay after settlement | `pc=287  box_create; assert` |
+
+- [x] On-chain state confirmed: `spend_today` tracked correctly across two
+      settlements, two consumed nonce boxes present, `verifier_pk` matching `.env`
+- [x] `admin_reset_spend` exercised on-chain (200000 → 0)
+- [x] Admin **rejection** proven on-chain too: a non-admin call fails at
+      `pc=142  app_global_get; ==; assert`. The rogue account needs no funding —
+      Algorand's pooled fees let the agent pay for its zero-fee call, so the
+      group reaches the contract instead of dying on an empty balance
+- [x] Full x402 loop verified by `scripts/live_roundtrip.py`: the identical
+      request returns 402 before the broadcast and 200 after it
+
+The verification script now distinguishes a contract rejection from an unrelated
+one. An early run "passed" only because the inflated amount exceeded the account
+balance, so two groups never reached the contract at all — those are now reported
+as INCONCLUSIVE with a non-zero exit rather than counted as a defence.
+
+Apps `769239295` / `769240052` are the vulnerable revision and must not be reused.
 
 ---
 
-## 4. Architectural & Component Refinements 🔧
+## 3. Other fixes in this pass
 
-### Refinement Track A — Deep Agent Runtime (Dynamic LLM & Prompt Injection)
-* **Goal**: Transition from deterministic agent simulation to dynamic LLM tool calling while maintaining zero paid API dependency.
-* **Tasks**:
-  1. **Local LLM Integration**: Add optional integration with a free local model provider (e.g. **Ollama** running `llama3.2:1b`/`3b` or `mistral`, or LangChain/LangGraph local bindings).
-  2. **Dynamic Tool Calling**: Let the LLM dynamically parse the user objective, decompose tasks, select tools, and format payment parameters.
-  3. **Live Injection Resistance Test**: Feed live prompt-injected web snippets into the LLM context to showcase the LLM being deceived, but the payment being **firmly blocked by SentinelPay policy and verifier**.
-  4. **Dedicated Agent Unit Tests**: Write direct unit tests for `agent/agent.py` and `agent/tools/` mocking dynamic LLM outputs.
-
-### Refinement Track B — Semantic Verifier Hardening (Defense-in-Depth)
-* **Goal**: Enhance task-goal alignment checks and eliminate keyword heuristics.
-* **Tasks**:
-  1. **Fix Category Substring False-Positive**: Refine category matching in `sentinelpay/verifier/verifier.py` so that tool names containing category tokens (e.g. `paid_research`) do not auto-pass unrelated declared goals.
-  2. **Zero-Shot Semantic Cosine Similarity**: Integrate a small local embeddings model (e.g. `sentence-transformers/all-MiniLM-L6-v2`) to compute semantic cosine similarity between the declared `user_objective` and the proposed `payment_intent.declared_goal`.
-  3. **Threshold Configuration**: Support configurable `verifier_threshold` (e.g., minimum cosine similarity of 0.75) in `AgentPolicy`.
-
-### Refinement Track C — Smart Contract & Storage Economics (AVM Polish)
-* **Goal**: Optimize contract storage costs and support multi-asset payments.
-* **Tasks**:
-  1. **ASA / USDC Payment Support**: Extend contract validation in `contracts/pyteal_contract.py` to inspect Asset Transfer transactions (`axfer`) in addition to native micro-ALGO payments (`pay`), supporting TestNet USDC.
-  2. **Box Storage Cleanup / Nonce Pruning**: Add a contract method to prune expired nonce boxes after their timestamp window has passed, allowing reclaim of Minimum Balance Requirements (MBR).
-
-### Refinement Track D — Visual Demo & Presentation Layer
-* **Goal**: Provide engaging visual demonstrations for hackathon judges.
-* **Tasks**:
-  1. **Interactive Web Dashboard / Rich Terminal UI**: Build a visual dashboard (or Rich console visualizer) displaying:
-     - Live Prompt → Agent Reasoning → SentinelPay Firewall Decision → On-Chain Atomic Group → Pera Explorer Link.
-     - Side-by-side comparison: **Scene A (Legitimate Approved)** vs **Scene B (Prompt Injection Blocked)**.
-  2. **2–3 Minute Demo Video**: Record the end-to-end demo highlighting the core pitch: *"Deterministic economic enforcement for probabilistic AI agents."*
-  3. **Slide Deck & Architecture Visuals**: Prepare final hackathon presentation slides and exported flowcharts.
-
-### Refinement Track E — MainNet Promotion (Competition Leaderboard)
-* **Goal**: Satisfy official x402 Global Challenge competition requirements.
-* **Tasks**:
-  1. **MainNet Contract Deployment**: Compile and deploy the SentinelPay contract to Algorand MainNet.
-  2. **Live MainNet Micropayment**: Execute a live micro-payment transaction via the GoPlausible facilitator to log an official entry on the challenge leaderboard.
+| Area | Problem | Fix |
+|---|---|---|
+| Verifier identity | Every process minted its own ephemeral Ed25519 key; the resource server could never validate an attestation the verifier service signed, and restarts invalidated outstanding attestations. `VERIFIER_PRIVATE_KEY` was read by exactly one script. | `sentinelpay/keys.py` loads one configured identity everywhere; `scripts/gen_verifier_key.py` generates it; on-chain paths fail closed without it. |
+| x402 proof check | `verify_settlement_proof` never checked `expires_at` or `decision`, so an expired or explicitly denied attestation was accepted forever. A rejected proof also consumed the nonce, locking out the valid retry. | Expiry, decision and clock-skew checks added; the nonce is consumed only after every check passes. |
+| Semantic verifier | Category matching read `tool_name` and `resource_id` as well as the goal, so a tool named `paid_research` satisfied the `research` category regardless of what was being bought — the check was vacuous. | Categories match the declared goal only. Added task-scope alignment: the goal must overlap the user's original objective, which is passed through the harness rather than restated by the agent. |
+| Spend tracking | `daily_spend_limit` was enforced against a counter that never decayed, so it was a lifetime limit. | Timestamped rolling window, configurable via `spend_window_seconds`. |
+| Intent validation | Amount had no lower bound; a negative amount passed the cap check and *reduced* recorded spend. Expiry was derived from a second `time.time()` call, so the lifetime check was flaky across a second boundary. | `amount > 0` enforced on both models; expiry derived from `timestamp`; intent lifetime capped by policy. |
+| 402 parsing | `parse_402_response` read `WWW-Authenticate` and then discarded it, so a header-only server looked like a server with no requirements. | Header is parsed. |
+| Module shadowing | `contracts/sentinelpay.py` shadowed the `sentinelpay` package whenever `contracts/` was on `sys.path`, breaking `python contracts/compile.py`. | Renamed to `contracts/reference_model.py`. |
+| Scripts | Four copies of `get_algod_client` and an unbounded confirmation loop that spun forever if a transaction never landed. | Shared `scripts/_chain.py` with a bounded wait; group construction centralized in `sentinelpay/payments/algorand.py`. |
+| Contract lifecycle | The spend counter had no reset, so the app bricked itself once cumulative spend reached the cap. | `admin_reset_spend`, creator-only. Cannot raise the cap, retire a nonce, or change the verifier key. |
+| Packaging | `pyproject.toml` declared dev dependencies twice with different pins; uv and pip resolved different ones. | Single `[dependency-groups] dev`. |
+| Resource server | Served the dataset on a valid signature alone. A signature proves an authorization was *issued*, not that money moved, so a replayed attestation unlocked the resource without any broadcast. | Acceptance now requires the contract's nonce box to exist on-chain; an unreachable chain fails closed. `sentinelpay/payments/settlement.py`. |
+| Off-task purchases | The task-alignment threshold required a single shared word, so "premium energy trading subscription" counted as aligned with an energy research task on the word "energy". | Threshold raised with a two-term floor, plus a deterministic `blocked_actions` denylist (specification section 7) that was never implemented. |
+| Staged attack | `simulate_attack=True` selected a hardcoded attacker address and amount from an if/else, so the injection demo proved nothing about the agent. | `agent/planner.py` parses the payment out of the malicious tool output; the attacker's numbers now come from the text. |
+| Test isolation | Tests hardcoded the placeholder payee, so they passed only on machines with no `.env`. | Tests read the payee and price off the server's own 402 challenge. |
 
 ---
 
-## 5. Priority Matrix & Action Plan
+## 4. Completed
+
+### Core engine (`sentinelpay/`)
+- [x] Intent normalization, bounded fields, deterministic SHA-256 intent hashing
+- [x] Deterministic policy engine: per-transaction cap, rolling cumulative cap,
+      tool/destination/currency allowlists, expiry and lifetime bounds
+- [x] Ed25519 attestation signing over two encodings — canonical JSON for the
+      HTTP verifier, fixed-layout binary for the contract
+- [x] Local semantic verifier: injection indicators, category alignment,
+      task-scope alignment
+- [x] Gateway middleware orchestrating the full decision
+- [x] x402 challenge parsing and settlement-proof verification
+- [x] Protected atomic group construction (`payments/algorand.py`)
+
+### Agent (`agent/`)
+- [x] Deterministic Deep Agent harness with no wallet-signing privileges
+- [x] Free vs SentinelPay-gated tool boundary
+- [x] Skills and subagent specs
+
+### Contracts & scripts
+- [x] Deployable AVM v8 PyTeal program with box-backed replay protection
+- [x] Pure-Python reference model kept in lockstep via shared offset constants
+- [x] Compilation pipeline; deploy, funding, broadcast and adversarial scripts
+
+### Services
+- [x] x402 resource endpoint (402 challenge → proof validation → data)
+- [x] Standalone verifier node
+
+### Tests — 153 passing
+- [x] Unit: policy, intent, attestation (JSON + AVM), verifier, keys, x402
+      handler, gateway, verifier service, facilitator payloads, group builder
+- [x] Integration: full x402 payment flow
+- [x] Adversarial: prompt injection, verifier bypass, replay, spend cap
+- [x] Contract: amount/destination substitution, blob tampering, forged
+      signature, expiry, cap, close-out, rekey, replay, admin authorization
+
+---
+
+## 5. Pending
+
+### P0 — Execution
+- [x] Redeploy the fixed contract to TestNet (section 2)
+- [x] Live atomic broadcast; confirmed transaction IDs captured
+- [x] `verify_attack.py --broadcast`; per-opcode rejection evidence captured
+- [x] Bind the resource server's acceptance to on-chain settlement. The server
+      now requires the contract's nonce box to exist before serving; that box is
+      written only by a successful `validate_and_pay`, so it transitively proves
+      a matching payment settled. Verified live by `scripts/live_roundtrip.py`.
+- [ ] Optional: route settlement through the GoPlausible facilitator's
+      `/verify` + `/settle` instead of direct algod broadcast. The client exists
+      and is smoke-tested; the box check above already makes acceptance
+      chain-derived, so this is now a compatibility nicety rather than a
+      security gap.
+
+### P1 — Hardening
+- [x] Optional local LLM planning (Ollama) so the agent's decisions can be
+      genuinely probabilistic, falling back to rules when unavailable
+- [x] Injection scenario is data-driven: the agent parses the attacker's amount
+      and address out of the tool output instead of reading them from a branch
+- [x] `blocked_actions` denylist from specification section 7
+- [ ] Replace keyword-based injection detection with a local embeddings model
+      (`all-MiniLM-L6-v2`) for cosine similarity between objective and goal
+- [ ] ASA / TestNet USDC support (`axfer` in addition to `pay`)
+- [ ] Nonce box pruning to reclaim MBR after expiry
+
+### P2 — Presentation
+- [ ] Terminal or web visualizer: prompt → reasoning → firewall decision →
+      atomic group → explorer link, Scene A beside Scene B
+- [ ] 2–3 minute demo video and slides
+
+### P3 — Competition
+- [ ] MainNet deployment with a segregated key set
+- [ ] One real MainNet micropayment through the GoPlausible facilitator
+
+---
+
+## 6. Priority matrix
 
 | Area | Item | Priority | Complexity | Status |
 |---|---|---|---|---|
-| **Execution** | Fund App MBR & Broadcast Live TestNet Group | 🔴 High (P0) | Low | Ready to Run |
-| **Execution** | Live Facilitator Roundtrip Verification | 🔴 High (P0) | Medium | In Progress |
-| **Security** | Semantic Verifier Substring Fix & Cosine Similarity | 🟡 Medium (P1) | Low | Planned |
-| **AI Agent** | Local LLM (Ollama / LangChain) Dynamic Tool Calling | 🟡 Medium (P1) | Medium | Planned |
-| **Contract** | ASA / USDC Support & Nonce Pruning | 🟡 Medium (P1) | Medium | Planned |
-| **Presentation**| Rich Terminal / Web UI Demo Visualizer | 🟢 Polish (P2) | Medium | Planned |
-| **Submission** | 2-3 Min Pitch Video & Slides | 🟢 Polish (P2) | Low | Planned |
-| **Competition** | Algorand MainNet Deployment & Challenge Entry | 🟢 Final (P3) | Low | Pending TestNet Sign-off |
+| Security | Authorization binding in the contract | 🔴 P0 | High | ✅ Fixed and verified on TestNet |
+| Execution | Redeploy + live broadcast + attack proof | 🔴 P0 | Low | ✅ Done |
+| Execution | On-chain acceptance at the resource server | 🔴 P0 | Medium | ✅ Done, verified live |
+| Execution | Facilitator `/verify` + `/settle` path | 🟡 P1 | Medium | Optional; box check already binds acceptance |
+| Security | Embeddings-based verifier | 🟡 P1 | Low | Not started |
+| AI Agent | Local LLM dynamic tool calling | 🟡 P1 | Medium | ✅ Optional Ollama planner |
+| Contract | ASA/USDC support, nonce pruning | 🟡 P1 | Medium | Not started |
+| Presentation | Demo visualizer, video, slides | 🟢 P2 | Medium | Not started |
+| Competition | MainNet deployment and entry | 🟢 P3 | Low | Pending TestNet sign-off |

@@ -1,6 +1,6 @@
 [project]
 name = "sentinelpay"
-version = "0.1.0"
+version = "0.4.0"
 description = "Authorization and policy-enforcement layer for autonomous AI-agent payments on Algorand and x402"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,7 +16,11 @@ dependencies = [
     "pyteal>=0.27.0",
 ]
 
-[project.optional-dependencies]
+# Single source of dev dependencies. There used to be a second, differently
+# pinned `[project.optional-dependencies] dev` block; uv resolved this group and
+# pip resolved the other, so the two toolchains installed different pytest
+# versions from the same file.
+[dependency-groups]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
@@ -26,13 +30,15 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.wheel]
+packages = ["sentinelpay"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests", "contracts/tests"]
 python_files = "test_*.py"
-
-[dependency-groups]
-dev = [
-    "pytest>=9.1.1",
-    "pytest-asyncio>=1.4.0",
+filterwarnings = [
+    # An unconfigured VERIFIER_PRIVATE_KEY is expected in the offline test
+    # suite; sentinelpay/keys.py warns about it deliberately.
+    "ignore:VERIFIER_PRIVATE_KEY is not set:RuntimeWarning",
 ]

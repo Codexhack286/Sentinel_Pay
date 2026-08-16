@@ -1,6 +1,5 @@
 """Protected paid tool that routes payments through SentinelPay gateway."""
 
-import uuid
 from typing import Dict, Any, Optional
 from sentinelpay.intent.models import PaymentIntent
 from sentinelpay.policy.models import AgentPolicy
@@ -25,6 +24,7 @@ class PaidResearchTool:
         declared_goal: str,
         amount: int,
         destination: str,
+        task_scope: str = "",
         resource: str = "energy-dataset-2026",
         currency: str = "uALGO",
     ) -> Dict[str, Any]:
@@ -36,6 +36,7 @@ class PaidResearchTool:
         intent = PaymentIntent(
             agent_id=agent_id,
             declared_goal=declared_goal,
+            task_scope=task_scope,
             tool_name=self.name,
             resource=resource,
             destination=destination,

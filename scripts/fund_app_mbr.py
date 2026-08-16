@@ -1,94 +1,88 @@
 """
-Step 1 — Fund SentinelPay App Account for Box MBR.
+Step 1 — Fund the SentinelPay app account for box MBR.
 
-The SentinelPay contract uses Algorand Box storage to record consumed nonces
-(replay protection). Before the first `validate_and_pay` call, the app account
-needs a minimum balance to cover the Box MBR:
+The contract records consumed nonces in box storage (replay protection). Before
+the first `validate_and_pay` call the app account must hold enough ALGO to back
+those boxes:
     - App base MBR:  0.1 ALGO
-    - Per-Box MBR:   0.0025 ALGO + 0.0004 ALGO/byte  (box key = nonce ~40 bytes)
-                     ≈ 0.019 ALGO per nonce box
-    - Safety buffer: fund 0.5 ALGO total to cover ~20 nonce boxes comfortably.
+    - Per-box MBR:   0.0025 + 0.0004/byte; a 32-byte key with a 1-byte value is
+                     0.0157 ALGO per consumed nonce
+    - Default below funds the base plus roughly 25 nonces.
 
-The sender is the AGENT_MNEMONIC account (same one used to deploy).
+Boxes are never deleted by the current contract, so this balance is consumed
+permanently as the demo runs. Top it up with `--amount` if a long demo session
+exhausts it.
 
 Usage:
-    uv run python scripts/fund_app_mbr.py
+    uv run python scripts/fund_app_mbr.py [--amount 500000]
 """
 
-import sys
+import argparse
 
-from algosdk import account, mnemonic, transaction
-from algosdk.v2client import algod
+from algosdk import transaction
+from algosdk.logic import get_application_address
 
+from scripts._chain import (
+    EXPLORER_TX,
+    account_from_mnemonic,
+    get_algod_client,
+    require,
+    wait_for_confirmation,
+)
 from sentinelpay.config import settings
 
-# Amount to send to the app account (in microAlgo). 0.5 ALGO covers ~20 nonce boxes.
-FUND_AMOUNT_UALGO = 500_000
-
-
-def get_algod_client() -> algod.AlgodClient:
-    return algod.AlgodClient(settings.ALGOD_TOKEN, settings.ALGOD_ADDRESS, headers={})
-
-
-def wait_for_confirmation(client: algod.AlgodClient, txid: str) -> dict:
-    last_round = client.status().get("last-round")
-    while True:
-        pending = client.pending_transaction_info(txid)
-        if pending.get("confirmed-round", 0) > 0:
-            return pending
-        last_round += 1
-        client.status_after_block(last_round)
+DEFAULT_FUND_AMOUNT_UALGO = 500_000
 
 
 def main() -> None:
-    if not settings.AGENT_MNEMONIC:
-        print("AGENT_MNEMONIC not set in .env.", file=sys.stderr)
-        sys.exit(1)
-    if not settings.SENTINELPAY_APP_ID:
-        print("SENTINELPAY_APP_ID not set in .env.", file=sys.stderr)
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Fund the SentinelPay app account for box MBR")
+    parser.add_argument(
+        "--amount",
+        type=int,
+        default=DEFAULT_FUND_AMOUNT_UALGO,
+        help=f"Target app-account balance in microAlgo (default {DEFAULT_FUND_AMOUNT_UALGO})",
+    )
+    args = parser.parse_args()
+
+    require("AGENT_MNEMONIC", "SENTINELPAY_APP_ID")
 
     client = get_algod_client()
-
-    # Derive sender address from mnemonic
-    private_key = mnemonic.to_private_key(settings.AGENT_MNEMONIC)
-    sender = account.address_from_private_key(private_key)
-
-    # App account address is deterministic: sha512/256("appID" || app_id_bytes)
-    app_address = transaction.logic.get_application_address(settings.SENTINELPAY_APP_ID)
+    private_key, sender = account_from_mnemonic(settings.AGENT_MNEMONIC)
+    app_address = get_application_address(settings.SENTINELPAY_APP_ID)
 
     print(f"Sender (agent):   {sender}")
     print(f"App account:      {app_address}")
     print(f"App ID:           {settings.SENTINELPAY_APP_ID}")
-    print(f"Funding amount:   {FUND_AMOUNT_UALGO} uALGO ({FUND_AMOUNT_UALGO / 1_000_000:.3f} ALGO)")
 
-    # Check current app account balance
     try:
-        info = client.account_info(app_address)
-        current = info.get("amount", 0)
-        print(f"App account current balance: {current} uALGO")
-        if current >= FUND_AMOUNT_UALGO:
-            print("App account already funded sufficiently. No action needed.")
-            return
+        current = client.account_info(app_address).get("amount", 0)
     except Exception:
-        print("App account not yet funded (expected for new apps).")
+        # A never-funded app account does not exist yet, which algod reports as
+        # an error rather than a zero balance.
+        current = 0
+    print(f"Current balance:  {current} uALGO")
 
-    params = client.suggested_params()
+    if current >= args.amount:
+        print("App account already funded sufficiently. No action needed.")
+        return
+
+    top_up = args.amount - current
+    print(f"Funding:          {top_up} uALGO ({top_up / 1_000_000:.3f} ALGO)")
+
     txn = transaction.PaymentTxn(
         sender=sender,
-        sp=params,
+        sp=client.suggested_params(),
         receiver=app_address,
-        amt=FUND_AMOUNT_UALGO,
+        amt=top_up,
         note=b"SentinelPay Box MBR funding",
     )
-    signed = txn.sign(private_key)
-    txid = client.send_transaction(signed)
+    txid = client.send_transaction(txn.sign(private_key))
     print(f"\nSubmitted funding txn: {txid}")
 
     confirmed = wait_for_confirmation(client, txid)
     print(f"Confirmed in round: {confirmed['confirmed-round']}")
-    print(f"\nApp account funded. Ready for first validate_and_pay call.")
-    print(f"Explorer: https://testnet.explorer.perawallet.app/tx/{txid}")
+    print("\nApp account funded. Ready for the first validate_and_pay call.")
+    print(f"Explorer: {EXPLORER_TX.format(txid)}")
 
 
 if __name__ == "__main__":

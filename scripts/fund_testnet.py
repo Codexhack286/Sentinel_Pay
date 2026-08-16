@@ -1,19 +1,34 @@
-"""Algorand TestNet account utility for SentinelPay."""
+"""
+Generate an Algorand TestNet account for SentinelPay.
 
-import algosdk
+Usage:
+    uv run python scripts/fund_testnet.py
+
+Prints a fresh address and mnemonic, then tells you where to fund it. The
+mnemonic is printed once and stored nowhere — put it straight into .env, which
+is gitignored.
+"""
+
 from algosdk import account, mnemonic
 
+# The older bank.testnet.algorand.network dispenser now 301s here.
+DISPENSER_URL = "https://lora.algokit.io/testnet/fund"
 
-def generate_testnet_account():
-    """Generates a new Algorand TestNet keypair and mnemonic."""
+
+def generate_testnet_account() -> None:
     private_key, address = account.generate_account()
     passphrase = mnemonic.from_private_key(private_key)
+
     print("=== New Algorand TestNet Account ===")
     print(f"Address:  {address}")
     print(f"Mnemonic: {passphrase}")
-    print("\nTo fund this account, visit the Algorand TestNet Dispenser:")
-    print("👉 https://bank.testnet.algorand.network/ or https://testnet.algoexplorer.io/dispenser")
-    print("Add this address and mnemonic to your .env file.")
+    print(f"\nFund it at the TestNet dispenser: {DISPENSER_URL}")
+    print(
+        "\nThen add to .env:\n"
+        f"  AGENT_MNEMONIC={passphrase}\n"
+        f"  RESOURCE_OWNER_ADDRESS={address}   # or a second account you control\n"
+        "\nThis mnemonic controls real TestNet funds. Never commit it."
+    )
 
 
 if __name__ == "__main__":

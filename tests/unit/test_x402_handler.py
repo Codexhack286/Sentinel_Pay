@@ -8,6 +8,8 @@ verify_settlement_proof (bad scheme, replay, destination/amount/currency
 mismatch, signature tamper) that weren't covered anywhere else.
 """
 
+import time
+
 import pytest
 
 from sentinelpay.payments.requests import PaymentRequirement
@@ -206,3 +208,90 @@ def test_verify_settlement_proof_rejects_malformed_base64(requirement, signer):
     )
     assert valid is False
     assert attestation is None
+
+
+def test_verify_settlement_proof_rejects_expired_attestation(signer, requirement):
+    """An attestation past its expiry used to be accepted forever."""
+    now = int(time.time())
+    attestation = signed_attestation(signer, requirement, issued_at=now - 600, expires_at=now - 300)
+    header = X402PaymentHandler.construct_settlement_proof(attestation, "tx1", "group1")
+
+    valid, reason, _ = X402PaymentHandler.verify_settlement_proof(
+        payment_proof_header=header,
+        expected_requirement=requirement,
+        verifier_public_key=signer.public_key_b64,
+        consumed_nonces=set(),
+    )
+    assert valid is False
+    assert "expired" in reason.lower()
+
+
+def test_verify_settlement_proof_rejects_non_allow_decision(signer, requirement):
+    attestation = signed_attestation(signer, requirement, decision="DENY")
+    header = X402PaymentHandler.construct_settlement_proof(attestation, "tx1", "group1")
+
+    valid, reason, _ = X402PaymentHandler.verify_settlement_proof(
+        payment_proof_header=header,
+        expected_requirement=requirement,
+        verifier_public_key=signer.public_key_b64,
+        consumed_nonces=set(),
+    )
+    assert valid is False
+    assert "non-authorizing decision" in reason
+
+
+def test_verify_settlement_proof_rejects_future_dated_attestation(signer, requirement):
+    now = int(time.time())
+    attestation = signed_attestation(
+        signer, requirement, issued_at=now + 3600, expires_at=now + 7200
+    )
+    header = X402PaymentHandler.construct_settlement_proof(attestation, "tx1", "group1")
+
+    valid, reason, _ = X402PaymentHandler.verify_settlement_proof(
+        payment_proof_header=header,
+        expected_requirement=requirement,
+        verifier_public_key=signer.public_key_b64,
+        consumed_nonces=set(),
+    )
+    assert valid is False
+    assert "future" in reason.lower()
+
+
+def test_rejected_proof_does_not_burn_the_nonce(signer, requirement):
+    """A failed check must not consume the nonce and lock out a valid retry."""
+    attestation = signed_attestation(signer, requirement, amount=1)  # amount mismatch
+    header = X402PaymentHandler.construct_settlement_proof(attestation, "tx1", "group1")
+    consumed = set()
+
+    valid, _, _ = X402PaymentHandler.verify_settlement_proof(
+        payment_proof_header=header,
+        expected_requirement=requirement,
+        verifier_public_key=signer.public_key_b64,
+        consumed_nonces=consumed,
+    )
+    assert valid is False
+    assert consumed == set()
+
+
+# --- parse_402_response: header fallback ---
+
+def test_parse_402_response_reads_www_authenticate_header():
+    headers = {
+        "WWW-Authenticate": (
+            'x402 scheme="algorand", network="testnet", pay_to="ADDR3", '
+            'amount="12345", asset="uALGO", resource="res-3"'
+        )
+    }
+    req = X402PaymentHandler.parse_402_response(headers=headers, body=None)
+
+    assert req is not None
+    assert req.pay_to == "ADDR3"
+    assert req.amount == 12345
+    assert req.resource_id == "res-3"
+
+
+def test_parse_402_response_ignores_header_without_payment_fields():
+    req = X402PaymentHandler.parse_402_response(
+        headers={"WWW-Authenticate": 'Bearer realm="api"'}, body=None
+    )
+    assert req is None

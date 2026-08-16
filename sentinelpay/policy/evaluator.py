@@ -1,14 +1,18 @@
 """Policy evaluator executing deterministic checks against payment intent."""
 
-from typing import TYPE_CHECKING
-from sentinelpay.policy.models import AgentPolicy, PolicyEvaluationResult, PolicyDecision
+import time
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+
+from sentinelpay.policy.models import AgentPolicy, PolicyDecision, PolicyEvaluationResult
 from sentinelpay.policy.rules import (
-    check_tool_allowed,
-    check_destination_allowed,
+    check_action_not_blocked,
     check_currency_allowed,
-    check_per_transaction_limit,
     check_cumulative_spend_limit,
+    check_destination_allowed,
     check_expiry,
+    check_intent_lifetime,
+    check_per_transaction_limit,
+    check_tool_allowed,
 )
 
 if TYPE_CHECKING:
@@ -16,46 +20,49 @@ if TYPE_CHECKING:
 
 
 class PolicyEvaluator:
-    """Evaluates canonical intent against deterministic policy rules."""
+    """Evaluates canonical intent against deterministic policy rules.
 
-    def __init__(self, cumulative_spend_tracker: dict = None):
-        # In-memory cumulative spend tracker for local development/testing: {agent_id: total_micro_units}
-        self.cumulative_spend_tracker = cumulative_spend_tracker or {}
+    Spend tracking is timestamped so ``daily_spend_limit`` really is a rolling
+    window rather than a counter that grows forever. Authoritative cumulative
+    state still lives on-chain (the contract's ``spend_today``); this tracker is
+    the local fast-path that lets the gateway deny before a transaction is ever
+    constructed.
+    """
 
-    def get_cumulative_spend(self, agent_id: str) -> int:
-        return self.cumulative_spend_tracker.get(agent_id, 0)
+    def __init__(self, cumulative_spend_tracker: Optional[Dict[str, List[Tuple[int, int]]]] = None):
+        # {agent_id: [(unix_timestamp, amount), ...]}
+        self._spend_log: Dict[str, List[Tuple[int, int]]] = cumulative_spend_tracker or {}
 
-    def record_spend(self, agent_id: str, amount: int):
-        self.cumulative_spend_tracker[agent_id] = self.get_cumulative_spend(agent_id) + amount
+    def _prune(self, agent_id: str, window_seconds: int, now: int) -> List[Tuple[int, int]]:
+        cutoff = now - window_seconds
+        entries = [(ts, amt) for ts, amt in self._spend_log.get(agent_id, []) if ts > cutoff]
+        self._spend_log[agent_id] = entries
+        return entries
+
+    def get_cumulative_spend(self, agent_id: str, window_seconds: int = 86_400) -> int:
+        return sum(amt for _, amt in self._prune(agent_id, window_seconds, int(time.time())))
+
+    def record_spend(self, agent_id: str, amount: int) -> None:
+        self._spend_log.setdefault(agent_id, []).append((int(time.time()), amount))
 
     def evaluate(self, intent: "CanonicalIntent", policy: AgentPolicy) -> PolicyEvaluationResult:
-        checks_passed = []
-        checks_failed = []
+        checks_passed: List[str] = []
+        checks_failed: List[str] = []
 
-        # 1. Tool check
-        ok, msg = check_tool_allowed(intent.tool_name, policy)
-        (checks_passed if ok else checks_failed).append(msg)
+        current_spend = self.get_cumulative_spend(intent.agent_id, policy.spend_window_seconds)
 
-        # 2. Destination check
-        ok, msg = check_destination_allowed(intent.destination, policy)
-        (checks_passed if ok else checks_failed).append(msg)
-
-        # 3. Currency check
-        ok, msg = check_currency_allowed(intent.currency, policy)
-        (checks_passed if ok else checks_failed).append(msg)
-
-        # 4. Per transaction limit check
-        ok, msg = check_per_transaction_limit(intent.amount, policy)
-        (checks_passed if ok else checks_failed).append(msg)
-
-        # 5. Daily cumulative spend check
-        current_spend = self.get_cumulative_spend(intent.agent_id)
-        ok, msg = check_cumulative_spend_limit(intent.amount, current_spend, policy)
-        (checks_passed if ok else checks_failed).append(msg)
-
-        # 6. Expiry check
-        ok, msg = check_expiry(intent.expiry)
-        (checks_passed if ok else checks_failed).append(msg)
+        results = [
+            check_tool_allowed(intent.tool_name, policy),
+            check_action_not_blocked(intent.declared_goal, policy),
+            check_destination_allowed(intent.destination, policy),
+            check_currency_allowed(intent.currency, policy),
+            check_per_transaction_limit(intent.amount, policy),
+            check_cumulative_spend_limit(intent.amount, current_spend, policy),
+            check_expiry(intent.expiry),
+            check_intent_lifetime(intent.timestamp, intent.expiry, policy),
+        ]
+        for ok, msg in results:
+            (checks_passed if ok else checks_failed).append(msg)
 
         if checks_failed:
             return PolicyEvaluationResult(

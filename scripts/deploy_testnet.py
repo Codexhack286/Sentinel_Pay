@@ -2,36 +2,24 @@
 Deploy the SentinelPay application to Algorand TestNet.
 
 Prerequisites:
-    1. `uv run python contracts/compile.py`  (produces contracts/build/*.teal)
-    2. `uv run python scripts/fund_testnet.py`  (generate + fund a creator/admin
-       account and a verifier account via the TestNet dispenser)
-    3. Populate .env with ADMIN_MNEMONIC and VERIFIER_MNEMONIC (or reuse
-       AGENT_MNEMONIC / VERIFIER_MNEMONIC — see .env.example)
+    1. uv run python scripts/gen_verifier_key.py   -> VERIFIER_{PUBLIC,PRIVATE}_KEY in .env
+    2. uv run python scripts/fund_testnet.py       -> creator account, funded at the dispenser
+    3. uv run python contracts/compile.py          -> contracts/build/*.teal
 
 Usage:
     uv run python scripts/deploy_testnet.py --max-daily-spend 1000000
 
-On success, prints the new SENTINELPAY_APP_ID to add to .env. This is the
-last piece of the "High Priority: TestNet Smart Contract Deployment" item in
-docs/status.md — everything upstream of this (contract logic, attestation
-signing, policy engine) is already implemented and unit-tested locally.
+On success, prints the new SENTINELPAY_APP_ID to add to .env.
 
-NOTE: This script talks to a live Algorand TestNet node (ALGOD_ADDRESS in
-.env / sentinelpay/config.py) and therefore requires outbound network access
-that a locked-down sandbox may not have. It has not been exercised against a
-live node from this environment — treat it as reviewed-but-unrun and smoke
-test it from a machine with TestNet connectivity before demo day.
+The verifier public key is written into the app's global state at creation and
+cannot be changed afterwards (the contract rejects UpdateApplication). Rotating
+the verifier key therefore means deploying a new app — deliberate, so a
+compromised admin key cannot quietly swap in an attacker's signing identity.
 
-CAVEAT (found during doc verification, not yet confirmed against a live
-node): `compile_program_source()` below calls algod's `POST /v2/teal/compile`
-endpoint, which the Algorand REST API docs state is "only enabled when a
-node's configuration file sets EnableDeveloperAPI to true." Public endpoints
-generally run with this enabled (it's required for most public dapp tooling
-to function at all), but it is not guaranteed for every provider. If
-`client.compile()` fails with a 404/501 against your configured
-ALGOD_ADDRESS, switch to a provider/config known to expose it (e.g. AlgoKit's
-bundled LocalNet, or Nodely/AlgoNode's standard testnet endpoint) rather than
-assuming the assembled bytecode is wrong.
+CAVEAT: `compile_teal` calls algod's `POST /v2/teal/compile`, which is only
+available on nodes with EnableDeveloperAPI set. Public endpoints generally have
+it on; if you get a 404/501, switch providers rather than assuming the
+bytecode is wrong.
 """
 
 import argparse
@@ -39,106 +27,100 @@ import base64
 import sys
 from pathlib import Path
 
-from algosdk import account, mnemonic, transaction
-from algosdk.v2client import algod
+from algosdk import transaction
 
+from scripts._chain import (
+    EXPLORER_APP,
+    account_from_mnemonic,
+    compile_teal,
+    get_algod_client,
+    wait_for_confirmation,
+)
 from sentinelpay.config import settings
+from sentinelpay.verifier.attestation import _pad_b64
 
 BUILD_DIR = Path(__file__).parent.parent / "contracts" / "build"
 
 
-def get_algod_client() -> algod.AlgodClient:
-    return algod.AlgodClient(settings.ALGOD_TOKEN, settings.ALGOD_ADDRESS, headers={})
-
-
-def wait_for_confirmation(client: algod.AlgodClient, txid: str) -> dict:
-    last_round = client.status().get("last-round")
-    while True:
-        pending = client.pending_transaction_info(txid)
-        if pending.get("confirmed-round", 0) > 0:
-            return pending
-        last_round += 1
-        client.status_after_block(last_round)
-
-
-def compile_program_source(client: algod.AlgodClient, source: str) -> bytes:
-    """Ask algod to assemble TEAL source to bytecode (works for pre-compiled TEAL)."""
-    compiled = client.compile(source)
-    return base64.b64decode(compiled["result"])
-
-
 def deploy(admin_mnemonic: str, verifier_public_key_b64: str, max_daily_spend: int) -> int:
-    if not (BUILD_DIR / "approval.teal").exists():
-        print("No compiled TEAL found. Run `uv run python contracts/compile.py` first.", file=sys.stderr)
+    approval_path = BUILD_DIR / "approval.teal"
+    clear_path = BUILD_DIR / "clear.teal"
+    if not approval_path.exists() or not clear_path.exists():
+        print(
+            "No compiled TEAL found. Run `uv run python contracts/compile.py` first.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
-    approval_source = (BUILD_DIR / "approval.teal").read_text()
-    clear_source = (BUILD_DIR / "clear.teal").read_text()
-
     client = get_algod_client()
-    admin_private_key = mnemonic.to_private_key(admin_mnemonic)
-    admin_address = account.address_from_private_key(admin_private_key)
+    admin_private_key, admin_address = account_from_mnemonic(admin_mnemonic)
 
-    approval_bytecode = compile_program_source(client, approval_source)
-    clear_bytecode = compile_program_source(client, clear_source)
+    verifier_pk_bytes = base64.b64decode(_pad_b64(verifier_public_key_b64))
+    if len(verifier_pk_bytes) != 32:
+        print(
+            f"VERIFIER_PUBLIC_KEY decodes to {len(verifier_pk_bytes)} bytes; expected 32. "
+            "Regenerate with scripts/gen_verifier_key.py.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-    # Add missing padding: some .env parsers strip trailing '=' from base64 values.
-    padded = verifier_public_key_b64 + "=" * (-len(verifier_public_key_b64) % 4)
-    verifier_pk_bytes = base64.b64decode(padded)
-    max_daily_spend_bytes = int(max_daily_spend).to_bytes(8, "big")
-
-    global_schema = transaction.StateSchema(num_uints=2, num_byte_slices=2)
-    local_schema = transaction.StateSchema(num_uints=0, num_byte_slices=0)
-
-    params = client.suggested_params()
     txn = transaction.ApplicationCreateTxn(
         sender=admin_address,
-        sp=params,
+        sp=client.suggested_params(),
         on_complete=transaction.OnComplete.NoOpOC,
-        approval_program=approval_bytecode,
-        clear_program=clear_bytecode,
-        global_schema=global_schema,
-        local_schema=local_schema,
-        app_args=[verifier_pk_bytes, max_daily_spend_bytes],
+        approval_program=compile_teal(client, approval_path.read_text()),
+        clear_program=compile_teal(client, clear_path.read_text()),
+        global_schema=transaction.StateSchema(num_uints=2, num_byte_slices=2),
+        local_schema=transaction.StateSchema(num_uints=0, num_byte_slices=0),
+        app_args=[verifier_pk_bytes, int(max_daily_spend).to_bytes(8, "big")],
     )
-    signed_txn = txn.sign(admin_private_key)
-    txid = client.send_transaction(signed_txn)
+    txid = client.send_transaction(txn.sign(admin_private_key))
     print(f"Submitted ApplicationCreate txn: {txid}")
 
-    confirmed = wait_for_confirmation(client, txid)
-    app_id = confirmed["application-index"]
+    app_id = wait_for_confirmation(client, txid)["application-index"]
 
     print(f"\nSentinelPay app deployed. App ID: {app_id}")
     print(f"Add this to .env: SENTINELPAY_APP_ID={app_id}")
+    print(f"Explorer: {EXPLORER_APP.format(app_id)}")
     print(
-        "\nNote: agents/verifier submitting `validate_and_pay` calls must fund the "
-        "app account for box MBR (nonce boxes) before first use — see docs/protocol.md."
+        "\nNext: fund the app account for nonce-box MBR with "
+        "`uv run python scripts/fund_app_mbr.py`."
     )
     return app_id
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Deploy SentinelPay app to Algorand TestNet")
-    parser.add_argument("--max-daily-spend", type=int, default=1_000_000, help="Cap in microAlgo (default 1.0 ALGO)")
+    parser.add_argument(
+        "--max-daily-spend",
+        type=int,
+        default=1_000_000,
+        help="Cumulative spend cap in microAlgo enforced on-chain (default 1.0 ALGO)",
+    )
     args = parser.parse_args()
 
-    if not settings.AGENT_MNEMONIC:
+    if args.max_daily_spend <= 0:
+        parser.error("--max-daily-spend must be positive")
+
+    admin_mnemonic = settings.admin_mnemonic
+    if not admin_mnemonic:
         print(
-            "AGENT_MNEMONIC not set in .env — this account is used as the app creator/admin "
-            "for this deploy script. Run scripts/fund_testnet.py, then add the mnemonic to .env.",
+            "Neither CONTRACT_CREATOR_MNEMONIC nor AGENT_MNEMONIC is set in .env. "
+            "Run scripts/fund_testnet.py, fund the account at the dispenser, then "
+            "add its mnemonic to .env.",
             file=sys.stderr,
         )
         sys.exit(1)
     if not settings.VERIFIER_PUBLIC_KEY:
         print(
-            "VERIFIER_PUBLIC_KEY not set in .env — this is the base64 Ed25519 public key "
-            "the deployed contract will use for on-chain attestation checks.",
+            "VERIFIER_PUBLIC_KEY not set in .env — run "
+            "`uv run python scripts/gen_verifier_key.py` first.",
             file=sys.stderr,
         )
         sys.exit(1)
 
     deploy(
-        admin_mnemonic=settings.AGENT_MNEMONIC,
+        admin_mnemonic=admin_mnemonic,
         verifier_public_key_b64=settings.VERIFIER_PUBLIC_KEY,
         max_daily_spend=args.max_daily_spend,
     )

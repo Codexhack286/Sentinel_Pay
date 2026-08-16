@@ -1,9 +1,5 @@
 """Interactive CLI runner for SentinelPay Demo Scenarios."""
 
-import sys
-import subprocess
-
-
 def run_demo():
     print("=" * 60)
     print(" SentinelPay Demo: Autonomous Agent Economic Authorization ")

@@ -1,16 +1,16 @@
 """SentinelPay Gateway middleware: orchestrates normalization, policy evaluation, verification, and attestation issuance."""
 
-import uuid
-from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field
+from typing import Optional
 
-from sentinelpay.intent.models import PaymentIntent, CanonicalIntent
-from sentinelpay.intent.normalizer import IntentNormalizer
+from pydantic import BaseModel
+
 from sentinelpay.intent.hasher import hash_intent
-from sentinelpay.policy.models import AgentPolicy, PolicyDecision
+from sentinelpay.intent.models import CanonicalIntent, PaymentIntent
+from sentinelpay.intent.normalizer import IntentNormalizer
 from sentinelpay.policy.evaluator import PolicyEvaluator
-from sentinelpay.verifier.verifier import IntentVerifier, LocalSemanticVerifier
+from sentinelpay.policy.models import AgentPolicy, PolicyDecision
 from sentinelpay.verifier.attestation import Attestation
+from sentinelpay.verifier.verifier import IntentVerifier, LocalSemanticVerifier
 
 
 class GatewayResponse(BaseModel):
@@ -81,7 +81,11 @@ class SentinelPayGateway:
                 intent_hash=i_hash,
             )
 
-        # Step 4: Record spend locally in evaluator tracking
+        # Step 4: Record spend locally. Deliberately recorded at authorization
+        # time rather than after settlement: if the payment later fails, this
+        # over-counts, which denies too eagerly. The reverse ordering would
+        # under-count and let a burst of concurrent requests slip past the cap.
+        # The authoritative counter is the contract's on-chain `spend_today`.
         self.policy_evaluator.record_spend(canonical.agent_id, canonical.amount)
 
         # Step 5: Return Authorized Response with Signed Attestation

@@ -1,6 +1,5 @@
 """Unit tests for Intent normalization and deterministic hashing."""
 
-import time
 from sentinelpay.intent.models import PaymentIntent, CanonicalIntent
 from sentinelpay.intent.normalizer import IntentNormalizer
 from sentinelpay.intent.hasher import hash_intent

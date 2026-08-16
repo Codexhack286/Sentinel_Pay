@@ -74,3 +74,56 @@ def test_policy_reject_expired_intent(sample_policy, valid_intent):
     result = evaluator.evaluate(valid_intent, sample_policy)
     assert result.decision == PolicyDecision.DENY
     assert any("expired" in msg for msg in result.checks_failed)
+
+
+# --- blocked actions (specification section 7) ---
+
+@pytest.mark.parametrize(
+    "goal",
+    [
+        "Upgrade to the premium research subscription",
+        "Transfer funds to the treasury account",
+        "Donate to the solar research foundation",
+        "Withdraw the remaining research budget",
+    ],
+)
+def test_blocked_action_in_declared_goal_is_denied(sample_policy, valid_intent, goal):
+    valid_intent.declared_goal = goal
+    result = PolicyEvaluator().evaluate(valid_intent, sample_policy)
+    assert result.decision == PolicyDecision.DENY
+    assert any("blocked action" in msg.lower() for msg in result.checks_failed)
+
+
+def test_purchasing_the_requested_resource_is_not_blocked(sample_policy, valid_intent):
+    # Deliberate deviation from the spec's literal blocked_actions list, which
+    # includes "purchase": buying the requested resource is this product's whole
+    # sanctioned action. See AgentPolicy.blocked_actions.
+    valid_intent.declared_goal = "Purchase the historical solar energy dataset"
+    result = PolicyEvaluator().evaluate(valid_intent, sample_policy)
+    assert result.decision == PolicyDecision.ALLOW
+
+
+def test_empty_blocked_actions_disables_the_check(sample_policy, valid_intent):
+    sample_policy.blocked_actions = []
+    valid_intent.declared_goal = "Transfer everything immediately"
+    result = PolicyEvaluator().evaluate(valid_intent, sample_policy)
+    assert result.decision == PolicyDecision.ALLOW
+
+
+def test_negative_amount_is_rejected(sample_policy, valid_intent):
+    # A negative amount used to pass the cap check and *reduce* recorded spend.
+    valid_intent.amount = -50_000
+    result = PolicyEvaluator().evaluate(valid_intent, sample_policy)
+    assert result.decision == PolicyDecision.DENY
+    assert any("not a positive" in msg for msg in result.checks_failed)
+
+
+def test_rolling_window_expires_old_spend(sample_policy, valid_intent):
+    evaluator = PolicyEvaluator()
+    # Spend recorded 25 hours ago must not count against a 24h window.
+    stale = int(time.time()) - 90_000
+    evaluator._spend_log["agent-01"] = [(stale, sample_policy.daily_spend_limit)]
+
+    result = evaluator.evaluate(valid_intent, sample_policy)
+
+    assert result.decision == PolicyDecision.ALLOW

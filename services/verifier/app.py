@@ -1,15 +1,18 @@
 """
 SentinelPay Verifier Service.
-Exposes REST endpoints to normalize, verify, and cryptographically sign payment attestations.
+Exposes REST endpoints to normalize, verify, and cryptographically sign payment
+attestations.
 """
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI
 from pydantic import BaseModel
 
-from sentinelpay.intent.models import PaymentIntent, CanonicalIntent
-from sentinelpay.policy.models import AgentPolicy
-from sentinelpay.gateway.middleware import SentinelPayGateway, GatewayResponse
 from sentinelpay.config import settings
+from sentinelpay.gateway.middleware import GatewayResponse, SentinelPayGateway
+from sentinelpay.intent.models import PaymentIntent
+from sentinelpay.keys import load_signer
+from sentinelpay.policy.models import AgentPolicy
+from sentinelpay.verifier.verifier import LocalSemanticVerifier
 
 app = FastAPI(
     title="SentinelPay Verifier Service",
@@ -17,7 +20,9 @@ app = FastAPI(
     description="Independent verification and attestation issuance node for SentinelPay.",
 )
 
-gateway = SentinelPayGateway()
+# Same configured identity the resource server validates against — without this
+# the two services mint independent keys and can never interoperate.
+gateway = SentinelPayGateway(verifier=LocalSemanticVerifier(signer=load_signer()))
 
 
 class VerificationRequest(BaseModel):
@@ -35,14 +40,12 @@ def health():
 
 
 @app.post("/verify", response_model=GatewayResponse)
-def verify_payment(req: VerificationRequest):
-    """
-    Evaluates payment intent against policy and returns authorization or denial.
-    """
-    response = gateway.process_payment_request(req.intent, req.policy)
-    return response
+def verify_payment(req: VerificationRequest) -> GatewayResponse:
+    """Evaluate a payment intent against policy and return authorization or denial."""
+    return gateway.process_payment_request(req.intent, req.policy)
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="127.0.0.1", port=settings.VERIFIER_PORT)

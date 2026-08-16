@@ -7,6 +7,8 @@ These tests isolate its three checks (empty goal, adversarial-indicator
 detection, category alignment) and the attestation-issuance path.
 """
 
+import time
+
 import pytest
 
 from sentinelpay.intent.models import CanonicalIntent
@@ -16,6 +18,7 @@ from sentinelpay.verifier.verifier import LocalSemanticVerifier
 
 
 def make_intent(**overrides) -> CanonicalIntent:
+    now = int(time.time())
     base = dict(
         policy_id="policy-1",
         agent_id="agent-1",
@@ -25,8 +28,10 @@ def make_intent(**overrides) -> CanonicalIntent:
         destination="MERCHANT_ADDR",
         amount=50000,
         currency="uALGO",
-        timestamp=1000,
-        expiry=2000,
+        # Wall-clock, not an arbitrary small integer: the verifier now refuses
+        # to issue an attestation whose expiry is already in the past.
+        timestamp=now,
+        expiry=now + 300,
     )
     base.update(overrides)
     return CanonicalIntent(**base)
@@ -107,11 +112,6 @@ def test_adversarial_indicator_in_resource_id_is_also_rejected(verifier):
 
 
 def test_category_misalignment_is_rejected(verifier):
-    # Use a tool_name/resource_id that doesn't itself contain an allowed
-    # category substring, isolating the declared_goal mismatch. Note: the
-    # category check matches goal OR tool_name OR resource_id (see
-    # verifier.py Check 3), so a tool name like "paid_research" would pass
-    # on substring match alone even with an off-topic goal.
     intent = make_intent(
         declared_goal="Buy concert tickets for a music festival",
         tool_name="paid_tickets",
@@ -134,25 +134,56 @@ def test_no_allowed_categories_skips_category_check(verifier):
     assert result.approved is True
 
 
-def test_category_check_matches_on_tool_name_substring_not_just_goal():
-    # DOCUMENTS ACTUAL BEHAVIOR (not necessarily desired): Check 3 in
-    # verifier.py does `cat in goal_lower or cat in tool_name.lower() or cat
-    # in resource_id.lower()`. A tool literally named "paid_research" will
-    # satisfy the "research" category even if the declared goal is entirely
-    # off-topic, because the OR short-circuits on tool_name. This means an
-    # agent with only a "paid_research"-named tool can request payment for
-    # any declared goal without tripping the category check. Flagging this
-    # here so it's a visible, tested behavior rather than a silent gap.
-    verifier = LocalSemanticVerifier(signer=AttestationSigner())
+def test_category_check_ignores_the_tool_name(verifier):
+    # Regression guard. The category check used to match against tool_name and
+    # resource_id as well as the goal, which made it vacuous: a tool literally
+    # named "paid_research" satisfied the "research" category no matter what the
+    # agent claimed it was buying. Only the declared goal is evidence now.
     intent = make_intent(
         declared_goal="Buy concert tickets for a music festival",
-        tool_name="paid_research",  # name alone satisfies "research" category
+        tool_name="paid_research",
         resource_id="ticket-marketplace",
     )
     policy = make_policy(allowed_categories=["research", "energy"])
     result = verifier.verify(intent, "hash123", policy)
 
-    assert result.approved is True  # passes today; see docstring above
+    assert result.approved is False
+    assert "align" in result.reason.lower()
+
+
+def test_goal_outside_the_authorized_task_scope_is_rejected(verifier):
+    # The agent proposes a purchase that is topically allowed (it mentions an
+    # allowed category) but has nothing to do with what the user asked for.
+    intent = make_intent(
+        task_scope="Research solar panel efficiency for the 2026 grid report",
+        declared_goal="Purchase a premium energy trading subscription upgrade",
+    )
+    policy = make_policy(allowed_categories=["research", "energy"])
+    result = verifier.verify(intent, "hash123", policy)
+
+    assert result.approved is False
+    assert "task scope" in result.reason.lower()
+
+
+def test_goal_matching_the_task_scope_is_approved(verifier):
+    intent = make_intent(
+        task_scope="Research solar panel efficiency for the 2026 grid report",
+        declared_goal="Purchase the 2026 solar panel efficiency research dataset",
+    )
+    result = verifier.verify(intent, "hash123", make_policy())
+
+    assert result.approved is True
+
+
+def test_attestation_never_outlives_the_policy_lifetime_cap(verifier):
+    now = int(time.time())
+    intent = make_intent(timestamp=now, expiry=now + 86_400)  # agent asks for a day
+    policy = make_policy(max_intent_lifetime_seconds=300)
+
+    result = verifier.verify(intent, "hash123", policy)
+
+    assert result.approved is True
+    assert result.attestation.expires_at <= now + 300
 
 
 def test_attestation_is_signed_with_verifiers_own_key(verifier):

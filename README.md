@@ -59,9 +59,12 @@ SentinelPay solves this by ensuring that **no payment can settle unless bound to
 | **Algorand Smart Contract Logic** | ✅ **Implemented** | Reference AVM logic for atomic group validation, replay defense, and cap tracking |
 | **PyTeal Contract (deployable)** | ✅ **Implemented** | Real compiling AVM v8 program with Box-storage replay protection (`contracts/pyteal_contract.py`) |
 | **GoPlausible Facilitator Client** | ✅ **Implemented** | `verify()`/`settle()` HTTP client against the public reference facilitator (`sentinelpay/payments/facilitator.py`) |
-| **TestNet Deploy Script** | ✅ **Deployed Live** | `scripts/deploy_testnet.py` — executed against live Algorand TestNet |
-| **Live TestNet Contract** | ✅ **Live** | App ID [`769239295`](https://testnet.explorer.perawallet.app/application/769239295) — verifier key & spend cap baked into on-chain global state |
-| **Live Atomic Group Broadcast** | 🔵 **Next** | Real `[payment + app-call]` settlement via GoPlausible on Algorand TestNet |
+| **Adversarial Settlement Proof** | ✅ **Verified on TestNet** | 6 attack classes submitted to Algorand; every one rejected by the contract itself, at a named opcode |
+| **On-chain Settlement Binding** | ✅ **Verified on TestNet** | The resource server serves only once the contract's nonce box confirms the payment settled; unreachable chain fails closed |
+| **Full x402 Roundtrip** | ✅ **Verified on TestNet** | `scripts/live_roundtrip.py` — the identical request returns 402 before the broadcast and 200 after |
+| **TestNet Deploy Script** | ✅ **Implemented** | `scripts/deploy_testnet.py` |
+| **Live TestNet Contract** | ✅ **Live** | App [`769368669`](https://testnet.explorer.perawallet.app/application/769368669) — verifier key and spend cap in on-chain global state |
+| **Live Atomic Group Broadcast** | ✅ **Settled** | [`7KRNWCNN...`](https://testnet.explorer.perawallet.app/tx/7KRNWCNNGUOZKEPOVZD3H4GYQWBOF6WGSN45XUZESB74OOKFDJRA) — round 66376855 |
 | **Algorand MainNet Promotion** | 🔵 **Planned** | MainNet deployment for x402 Global Challenge submission |
 
 ---
@@ -83,6 +86,7 @@ sentinelpay/
 │   └── demo-scenarios.md              # Scenario A (Legitimate) & Scenario B (Attack)
 │
 ├── agent/
+│   ├── planner.py                     # Rule-based + optional local-LLM planning
 │   ├── agent.py                       # DeepAgent harness & execution logic
 │   ├── AGENTS.md                      # Agent roles & boundaries
 │   ├── tools/                         # Free & protected paid tool abstractions
@@ -93,27 +97,40 @@ sentinelpay/
 │   ├── policy/                        # Deterministic rules, limits & evaluator
 │   ├── intent/                        # Normalizer, models & SHA-256 hasher
 │   ├── verifier/                      # Ed25519 signer & semantic verifier
-│   ├── payments/                      # x402 challenge parser & settlement proofs
+│   ├── payments/                      # x402 parsing, group builder, settlement, facilitator
 │   ├── gateway/                       # Core SentinelPay middleware gateway
+│   ├── keys.py                        # Shared verifier signing identity
 │   └── config.py                      # Settings management
 │
 ├── contracts/
-│   ├── sentinelpay.py                 # AVM smart contract & reference validator
+│   ├── pyteal_contract.py             # Deployable AVM v8 program
+│   ├── reference_model.py             # Pure-Python model of the same invariants
+│   ├── compile.py                     # PyTeal -> contracts/build/*.teal
 │   ├── README.md                      # Contract deployment notes
-│   └── tests/test_sentinelpay.py      # On-chain rule unit tests
+│   └── tests/                         # Reference-model + compiled-TEAL tests
 │
 ├── services/
 │   ├── api/app.py                     # x402 paid resource endpoint (FastAPI)
 │   └── verifier/app.py                # Standalone verifier service (FastAPI)
 │
 ├── tests/
-│   ├── unit/                          # Policy, intent, and attestation tests
+│   ├── unit/                          # Policy, intent, attestation, agent, settlement
 │   ├── integration/                   # End-to-end x402 payment flow
 │   └── attacks/                       # Prompt injection, bypass, replay, spend cap
 │
 ├── scripts/
-│   ├── dev.py                         # Development server runner
+│   ├── _chain.py                      # Shared algod client & confirmation helpers
+│   ├── gen_verifier_key.py            # Generate the shared verifier identity
 │   ├── fund_testnet.py                # Algorand TestNet account generator
+│   ├── deploy_testnet.py              # Deploy the SentinelPay app
+│   ├── deploy_budget_app.py           # Deploy the opcode-budget helper app
+│   ├── fund_app_mbr.py                # Fund the app account for nonce boxes
+│   ├── check_balance.py               # Pre-flight: balances + verifier key match
+│   ├── live_broadcast.py              # Legitimate on-chain settlement
+│   ├── live_roundtrip.py              # Full 402 -> authorize -> settle -> 200 loop
+│   ├── verify_attack.py               # Proves unauthorized groups do not settle
+│   ├── admin_reset_spend.py           # Zero the on-chain spend counter (admin only)
+│   ├── dev.py                         # Development server runner
 │   └── run_demo.py                    # Interactive demo selector
 │
 └── examples/
@@ -186,25 +203,33 @@ uv run python contracts/compile.py
 # 2. Generate a TestNet account, then fund it via the dispenser link it prints
 uv run python scripts/fund_testnet.py
 
-# 3. Generate your Ed25519 verifier keypair and add both to .env
-uv run python -c "
-import base64
-from cryptography.hazmat.primitives.asymmetric import ed25519
-priv = ed25519.Ed25519PrivateKey.generate()
-pub  = priv.public_key()
-print('VERIFIER_PUBLIC_KEY=' + base64.b64encode(pub.public_bytes_raw()).decode())
-print('VERIFIER_PRIVATE_KEY=' + base64.b64encode(priv.private_bytes_raw()).decode())
-"
+# 3. Generate the shared Ed25519 verifier identity and add both values to .env
+uv run python scripts/gen_verifier_key.py
 # Wrap the values in double quotes in .env to preserve base64 padding (=)
 
 # 4. Add AGENT_MNEMONIC and quoted VERIFIER_PUBLIC_KEY/VERIFIER_PRIVATE_KEY to .env
 
-# 5. Deploy
+# 5. Deploy the SentinelPay app and the opcode-budget helper
 uv run python scripts/deploy_testnet.py --max-daily-spend 1000000
-# Prints SENTINELPAY_APP_ID — add it to .env
+uv run python scripts/deploy_budget_app.py
+# Add the printed SENTINELPAY_APP_ID and BUDGET_APP_ID to .env
+
+# 6. Fund the app account for nonce-box storage, then settle and attack it
+uv run python scripts/fund_app_mbr.py
+uv run python scripts/live_roundtrip.py     # the full 402 -> pay -> 200 loop
+uv run python scripts/verify_attack.py --broadcast   # attacks rejected on-chain
 ```
 
-**Live TestNet contract**: App ID [`769239295`](https://testnet.explorer.perawallet.app/application/769239295)
+**Live TestNet deployment**: SentinelPay app
+[`769368669`](https://testnet.explorer.perawallet.app/application/769368669),
+budget helper [`769368677`](https://testnet.explorer.perawallet.app/application/769368677).
+Full transaction list and the per-opcode adversarial results are in
+[SETUP.md](SETUP.md#testnet-contract-info-live).
+
+> The earlier apps (`769239295` / `769240052`) came from a contract revision that
+> did not bind destination, amount and nonce to the signed attestation — a single
+> valid authorization could settle any amount to any address. They are superseded
+> and must not be reused. See [docs/status.md](docs/status.md) §2.
 
 ---
 

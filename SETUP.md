@@ -32,7 +32,7 @@ cp .env.example .env
 
 Leave everything blank for now — local demos and tests work without any keys.
 
-### 3. Run the test suite (61/61 should pass)
+### 3. Run the test suite (all should pass)
 
 ```bash
 uv run pytest -v
@@ -82,24 +82,26 @@ Swagger UI (browser):
 
 ## Part 2 — TestNet Deployment
 
-### Step 1 — Generate Ed25519 Verifier Keypair
+### Step 1 — Generate the Ed25519 Verifier Keypair
 
 ```bash
-uv run python -c "
-import base64
-from cryptography.hazmat.primitives.asymmetric import ed25519
-priv = ed25519.Ed25519PrivateKey.generate()
-pub  = priv.public_key()
-print('VERIFIER_PUBLIC_KEY=' + base64.b64encode(pub.public_bytes_raw()).decode())
-print('VERIFIER_PRIVATE_KEY=' + base64.b64encode(priv.private_bytes_raw()).decode())
-"
+uv run python scripts/gen_verifier_key.py
 ```
 
-Add both values to `.env`. **Wrap them in double quotes** to preserve the `=` padding:
+Add both printed values to `.env`. **Wrap them in double quotes** to preserve
+the `=` padding:
 ```
 VERIFIER_PUBLIC_KEY="<paste here>"
 VERIFIER_PRIVATE_KEY="<paste here>"
 ```
+
+This one key is shared by every process: the verifier service signs with it, the
+x402 resource server validates against it, and the deployed contract stores the
+public half. If `VERIFIER_PRIVATE_KEY` is unset, each process mints a throwaway
+key (with a warning) and nothing validates anything across process boundaries.
+
+The private key is as sensitive as a wallet mnemonic. Use separate keys for
+TestNet and MainNet, and never log or commit it.
 
 ### Step 2 — Generate & Fund an Algorand TestNet Account
 
@@ -113,21 +115,17 @@ AGENT_MNEMONIC="word1 word2 word3 ... word25"
 ```
 
 Then fund the address at the Algorand TestNet Dispenser:
-- **https://bank.testnet.algorand.network/**
+- **https://lora.algokit.io/testnet/fund** (the older
+  `bank.testnet.algorand.network` URL redirects here)
 
-Wait ~30 seconds for funds to arrive. Verify:
+Wait ~10 seconds for funds to arrive, then verify:
 ```bash
-uv run python -c "
-from algosdk.v2client import algod
-from algosdk import account, mnemonic
-from sentinelpay.config import settings
-client = algod.AlgodClient(settings.ALGOD_TOKEN, settings.ALGOD_ADDRESS, headers={})
-pk = mnemonic.to_private_key(settings.AGENT_MNEMONIC)
-addr = account.address_from_private_key(pk)
-info = client.account_info(addr)
-print('Balance:', info['amount'] / 1_000_000, 'ALGO')
-"
+uv run python scripts/check_balance.py
 ```
+
+This also reports the app account's box-MBR balance and whether the verifier key
+in `.env` matches the one baked into the deployed contract — a mismatch there
+otherwise surfaces much later as an opaque `logic eval error`.
 
 ### Step 3 — Compile the Smart Contract
 
@@ -174,8 +172,8 @@ The contract stores nonces in Algorand Box storage (replay protection). The app
 account needs a minimum balance before the first payment:
 
 ```bash
-uv run python scripts/fund_app_mbr.py
-# Sends 0.5 ALGO to the contract account
+uv run python scripts/fund_app_mbr.py --amount 300000
+# ~0.0157 ALGO of minimum balance is locked per consumed nonce, permanently
 ```
 
 ### Step 7 — Smoke Test the Facilitator
@@ -187,9 +185,28 @@ uv run python scripts/smoke_test_facilitator.py
 
 ---
 
-## Part 3 — Live Atomic Group Settlement
+## Part 3 — Live Settlement
 
-### Run the live broadcast
+### The full x402 loop (recommended — this is the demo)
+
+```bash
+uv run python scripts/live_roundtrip.py
+```
+
+Runs the entire protocol against live TestNet in one command:
+
+1. `GET /paid-dataset` with no payment -> **402** plus payment requirements
+2. SentinelPay authorizes the exact payment and signs an attestation
+3. The same request with that attestation, *before broadcasting* -> **402**
+   ("payment not settled"). A valid signature is not a payment.
+4. The protected atomic group is broadcast and confirms on-chain
+5. The **identical** request -> **200**, resource served
+6. A third attempt -> **403**, replay refused
+
+Step 3 next to step 5 is the whole argument: same request, same signature, and
+the only thing that changed is that the money actually moved.
+
+### Run just the broadcast
 
 ```bash
 uv run python scripts/live_broadcast.py
@@ -221,8 +238,8 @@ SentinelPay Live Settlement Complete!
 
 ```ini
 # ── Model (local dev — no changes needed) ─────────────────────────────────────
-MODEL_PROVIDER=local
-MODEL_NAME=mock-deep-agent
+MODEL_PROVIDER=local                       # or `ollama` for a real local model
+MODEL_NAME=llama3.2:3b
 
 # ── Algorand TestNet nodes (public, no token needed) ──────────────────────────
 ALGOD_ADDRESS=https://testnet-api.algonode.cloud
@@ -233,12 +250,17 @@ INDEXER_PORT=443
 INDEXER_TOKEN=
 
 # ── Accounts (mnemonics — NEVER commit, always quote in .env) ─────────────────
-AGENT_MNEMONIC="word1 word2 ... word25"    # creator + payment sender
+AGENT_MNEMONIC="word1 word2 ... word25"    # payment sender; funds the group fees
+CONTRACT_CREATOR_MNEMONIC=                 # deploy + admin; falls back to AGENT_MNEMONIC
 VERIFIER_MNEMONIC=                          # optional second account
 
+# ── The resource being sold ───────────────────────────────────────────────────
+RESOURCE_OWNER_ADDRESS=                    # real Algorand address; blank = pay self
+RESOURCE_PRICE_UALGO=100000
+
 # ── Contract IDs (set after deployment) ───────────────────────────────────────
-SENTINELPAY_APP_ID=769240052               # from deploy_testnet.py output
-BUDGET_APP_ID=769240123                    # from deploy_budget_app.py output
+SENTINELPAY_APP_ID=769368669               # from deploy_testnet.py output
+BUDGET_APP_ID=769368677                    # from deploy_budget_app.py output
 
 # ── Verifier Ed25519 Keys (quote to preserve = padding) ───────────────────────
 VERIFIER_PUBLIC_KEY="<base64>"             # baked into the contract on deploy
@@ -259,13 +281,18 @@ X402_NETWORK=algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=
 
 | Script | Command | Purpose |
 |--------|---------|---------|
+| `gen_verifier_key.py` | `uv run python scripts/gen_verifier_key.py` | Generate the shared verifier Ed25519 identity |
 | `fund_testnet.py` | `uv run python scripts/fund_testnet.py` | Generate Algorand TestNet account + faucet link |
+| `check_balance.py` | `uv run python scripts/check_balance.py` | Pre-flight: balances + verifier key match |
 | `compile.py` | `uv run python contracts/compile.py` | Compile PyTeal → TEAL bytecode |
 | `deploy_testnet.py` | `uv run python scripts/deploy_testnet.py` | Deploy SentinelPay contract to TestNet |
 | `deploy_budget_app.py` | `uv run python scripts/deploy_budget_app.py` | Deploy opcode-budget helper app |
 | `fund_app_mbr.py` | `uv run python scripts/fund_app_mbr.py` | Fund contract account for Box MBR |
 | `smoke_test_facilitator.py` | `uv run python scripts/smoke_test_facilitator.py` | Check GoPlausible facilitator uptime |
-| `live_broadcast.py` | `uv run python scripts/live_broadcast.py` | End-to-end live atomic group settlement |
+| `live_broadcast.py` | `uv run python scripts/live_broadcast.py` | Live atomic group settlement |
+| `live_roundtrip.py` | `uv run python scripts/live_roundtrip.py` | Full x402 loop: 402 -> authorize -> settle -> 200 |
+| `admin_reset_spend.py` | `uv run python scripts/admin_reset_spend.py` | Zero the on-chain spend counter (admin only) |
+| `verify_attack.py` | `uv run python scripts/verify_attack.py --broadcast` | Prove unauthorized groups are rejected on-chain |
 | `run_demo.py` | `uv run python scripts/run_demo.py` | Interactive demo menu |
 
 ---
@@ -275,20 +302,46 @@ X402_NETWORK=algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=
 | Error | Cause | Fix |
 |-------|-------|-----|
 | `Incorrect padding` | `.env` parser strips `=` from base64 values | Wrap values in double quotes in `.env` |
-| `overspend` | Deployer/agent account has 0 ALGO | Fund at https://bank.testnet.algorand.network/ |
+| `overspend` | Deployer/agent account has 0 ALGO | Fund at https://lora.algokit.io/testnet/fund |
 | `dynamic cost budget exceeded` | `ed25519verify_bare` needs 1900 opcode units | Ensure `BUDGET_APP_ID` is set; re-run `deploy_budget_app.py` |
-| `WrongKeyLengthError` | Placeholder address used as recipient | Check `RESOURCE_OWNER_ADDRESS` in `live_broadcast.py` |
+| `WrongKeyLengthError` | Placeholder address used as recipient | Set `RESOURCE_OWNER_ADDRESS` to a real address, or leave it blank to pay self |
+| `Attestation has no AVM signature` | Destination is not a real Algorand address, so the attestation was never authorized for on-chain use | Set a valid `RESOURCE_OWNER_ADDRESS` |
+| `VERIFIER_PRIVATE_KEY is not set` (warning) | No shared verifier identity configured | Run `scripts/gen_verifier_key.py` and fill in `.env` |
+| `assert failed` / `logic eval error` on `validate_and_pay` | App deployed from an older contract revision whose argument layout differs | Recompile and redeploy: `contracts/compile.py`, then `scripts/deploy_testnet.py` |
 | `/health 404` on verifier | Wrong route — verifier health is at `/` not `/health` | Use `curl.exe http://127.0.0.1:8001/` |
 | `HTTP 402` from curl | Expected! 402 is the paywall challenge | Use `curl.exe` (not PowerShell alias) to see response body |
 
 ---
 
-## TestNet Contract Info (Live)
+## TestNet Contract Info (live)
+
+Deployed from the fixed contract and verified end to end on Algorand TestNet.
 
 | Item | Value |
 |------|-------|
-| SentinelPay App ID | `769240052` |
-| Budget App ID | `769240123` |
-| Live Settlement Tx | [`3CNWBV2L...`](https://testnet.explorer.perawallet.app/tx/3CNWBV2LSTEBDQV5MPQFLKCU6BLK4XO2VDOFQ3NPDRBGTJAGIL3A) |
-| Confirmed Round | `66296621` |
-| Explorer | [Pera TestNet](https://testnet.explorer.perawallet.app/application/769240052) · [Lora](https://lora.algokit.io/testnet/application/769240052) |
+| SentinelPay App ID | [`769368669`](https://testnet.explorer.perawallet.app/application/769368669) |
+| Budget helper App ID | [`769368677`](https://testnet.explorer.perawallet.app/application/769368677) |
+| Legitimate settlement | [`7KRNWCNN...`](https://testnet.explorer.perawallet.app/tx/7KRNWCNNGUOZKEPOVZD3H4GYQWBOF6WGSN45XUZESB74OOKFDJRA) — round 66376855 |
+| Admin spend reset | [`ZPBCAD72...`](https://testnet.explorer.perawallet.app/tx/ZPBCAD72E3OQM3XO3H26O4XKRPP53NG3R7DUJI3FNUIJCK75KJBQ) |
+
+### Adversarial results — every rejection came from the contract
+
+`uv run python scripts/verify_attack.py --broadcast`
+
+| Attack | Contract rejection |
+|---|---|
+| Amount substitution (100k authorized, 200k paid) | `pc=263  load 0; ==; assert` |
+| Destination substitution | `pc=256  extract 8 32; ==; assert` |
+| Blob tampering (signed bytes edited to match the attack) | `pc=229  ed25519verify_bare; assert` |
+| Forged signature (attacker's own key) | `pc=229  ed25519verify_bare; assert` |
+| Replay (authorization settled, then resubmitted) | `pc=287  box_create; assert` |
+
+The bare payment settles as an ordinary transfer, as it must — it is just an
+Algorand payment. It carries no authorization, consumes no nonce, and the
+resource server refuses to serve against it.
+
+> **Superseded.** Apps `769239295` / `769240052` came from the earlier contract
+> revision, whose `validate_and_pay` took destination, amount and nonce as
+> *unsigned* arguments with nothing binding them to the signed attestation. A
+> single genuine authorization could settle any amount to any address there. Do
+> not reuse them.

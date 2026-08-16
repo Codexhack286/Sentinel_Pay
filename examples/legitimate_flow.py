@@ -3,11 +3,12 @@ Example Scenario A: Legitimate Autonomous Payment Flow
 User Objective: "Research renewable energy datasets and purchase relevant reports up to 0.10 ALGO."
 """
 
-import json
 from agent.agent import DeepAgent
 from sentinelpay.policy.models import AgentPolicy
 from sentinelpay.gateway.middleware import SentinelPayGateway
+from sentinelpay.config import settings
 from sentinelpay.verifier.verifier import LocalSemanticVerifier
+from agent.planner import build_planner
 from sentinelpay.payments.x402 import X402PaymentHandler
 
 
@@ -29,7 +30,12 @@ def main():
 
     # 2. Initialize SentinelPay Gateway and Deep Agent
     gateway = SentinelPayGateway(verifier=LocalSemanticVerifier())
-    agent = DeepAgent(agent_id="deep-agent-researcher-01", policy=policy, gateway=gateway)
+    agent = DeepAgent(
+        agent_id="deep-agent-researcher-01",
+        policy=policy,
+        gateway=gateway,
+        planner=build_planner(settings.MODEL_PROVIDER, settings.MODEL_NAME),
+    )
 
     # 3. User Goal
     user_goal = "Research renewable energy datasets and retrieve 2026 statistics"
@@ -67,11 +73,14 @@ def main():
             tx_id="tx_demo_settle_001",
             group_id="group_demo_settle_001",
         )
-        print(f"\n[ALGORAND] Atomic Transaction Group Constructed:")
+        print("\n[ALGORAND] Atomic transaction group that would be submitted:")
         print(f"        Tx 0: Payment 100,000 uALGO -> {payment_attempt['destination'][:16]}...")
-        print(f"        Tx 1: SentinelPay App Call (Validates Attestation, Nonce, Spend Caps)")
-        print(f"        Tx 2: x402 Settlement Note ({proof[:30]}...)")
-        print("\n[STATUS] Settlement confirmed on Algorand! Paid resource delivered to agent.")
+        print("        Tx 1: SentinelPay validate_and_pay (binds attestation, nonce, spend cap)")
+        print(f"        Tx 2+: Opcode-budget NoOps      ({proof[:30]}...)")
+        print(
+            "\n[STATUS] Authorization issued. This example runs offline; for a real\n"
+            "         on-chain settlement run: uv run python scripts/live_broadcast.py"
+        )
 
     print(f"\n[FINAL AGENT RESULT] {log.final_output}")
     print("================================================================\n")

@@ -27,12 +27,15 @@ Cryptographically Signed Attestation (Ed25519)
          │
          ▼
 Algorand Atomic Transaction Group
-  ├── Tx 0: Payment Transaction (Asset transfer / micro-ALGO)
-  ├── Tx 1: SentinelPay Contract App Call (Validates Attestation, Nonce, Spend Caps)
-  └── Tx 2: x402 Resource / Settlement Proof
+  ├── Tx 0: Payment Transaction (micro-ALGO)
+  ├── Tx 1: SentinelPay validate_and_pay App Call
+  │         (signature, destination, amount, expiry, spend cap, nonce box)
+  └── Tx 2+: Opcode-budget NoOps (no logic; they only pool AVM budget)
          │
          ▼
-x402 Paid Endpoint (Serves resource upon on-chain verification)
+x402 Paid Endpoint
+  └── Serves the resource only after confirming on-chain that the
+      contract consumed this authorization's nonce
 ```
 
 ## 2. Security Boundaries & Trust Levels
@@ -58,7 +61,14 @@ x402 Paid Endpoint (Serves resource upon on-chain verification)
    - If approved, an Ed25519 signed `Attestation` is produced.
 5. **Atomic Transaction Grouping**: An Algorand atomic transaction group is formed combining the payment transaction with the SentinelPay verification app call.
 6. **Smart Contract Verification**: The Algorand contract inspects the group:
-   - Verifies verifier signature against configured public key.
-   - Validates that payment parameters match the attested intent.
-   - Enforces spend caps and marks the unique nonce/lease as consumed.
-7. **Settlement & Fulfillment**: If the atomic group confirms, the resource server verifies the group execution and returns `HTTP 200 OK` with the paid resource payload.
+   - Verifies the verifier signature over the fixed-layout authorization blob.
+   - Reads destination, amount, nonce and expiry *out of those signed bytes* and
+     compares them to the actual payment — nothing arrives as an unsigned
+     argument that a caller could substitute.
+   - Rejects `CloseRemainderTo` and `RekeyTo` on both transactions.
+   - Enforces the cumulative spend cap and writes the nonce to box storage.
+7. **Settlement & Fulfillment**: The resource server looks up the nonce box on
+   chain. Because that box is written only by a successful `validate_and_pay`,
+   its presence transitively proves a matching payment settled — so the server
+   returns `HTTP 200 OK` with the payload. A missing box, or an unreachable
+   node, returns `402`: unproven means unpaid.
