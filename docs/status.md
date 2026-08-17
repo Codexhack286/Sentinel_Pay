@@ -1,7 +1,7 @@
 # SentinelPay — Status, Pending Tasks & Roadmap
 
 **Current Version**: `0.4.0`
-**Last Updated**: August 17, 2026 — security review and authorization-binding fix
+**Last Updated**: August 17, 2026 — audit fixes (concurrency, tracing wiring, planner validation, contract lockstep)
 **Repository**: [https://github.com/Codexhack286/Sentinel_Pay](https://github.com/Codexhack286/Sentinel_Pay)
 
 ---
@@ -16,7 +16,7 @@ as the payment.
 
 **Current state**: engine, agent runtime, contract (both the deployable PyTeal
 program and the reference model), services, adversarial test matrix and demo
-flows are implemented and green — **153/153 tests passing**, all offline.
+flows are implemented and green — **166/166 tests passing**, all offline.
 
 A security review found the previously deployed contract did not bind the
 enforced fields to the signed attestation. **Fixed, redeployed, and verified
@@ -149,7 +149,7 @@ Apps `769239295` / `769240052` are the vulnerable revision and must not be reuse
 - [x] x402 resource endpoint (402 challenge → proof validation → data)
 - [x] Standalone verifier node
 
-### Tests — 153 passing
+### Tests — 166 passing
 - [x] Unit: policy, intent, attestation (JSON + AVM), verifier, keys, x402
       handler, gateway, verifier service, facilitator payloads, group builder
 - [x] Integration: full x402 payment flow

@@ -19,9 +19,12 @@ DEFAULT_PROJECT = "sentinelpay"
 
 def _configure() -> None:
     if settings.LANGSMITH_API_KEY:
-        # Respect an explicitly exported override (e.g. LANGSMITH_TRACING=false
-        # for a run that must not emit traces) while defaulting to enabled.
-        os.environ.setdefault("LANGSMITH_TRACING", "true")
+        # Respect an explicit override. The value may come from the shell or
+        # from .env; pydantic-settings merges both into `settings`, so look
+        # there, not at os.environ. An unset LANGSMITH_TRACING defaults to on.
+        explicit = "LANGSMITH_TRACING" in settings.model_fields_set
+        enabled = settings.LANGSMITH_TRACING if explicit else True
+        os.environ["LANGSMITH_TRACING"] = "true" if enabled else "false"
         os.environ["LANGSMITH_API_KEY"] = settings.LANGSMITH_API_KEY
         os.environ.setdefault(
             "LANGSMITH_PROJECT", settings.LANGSMITH_PROJECT or DEFAULT_PROJECT

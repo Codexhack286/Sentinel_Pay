@@ -186,10 +186,26 @@ class OllamaPlanner:
             )
             response.raise_for_status()
             parsed = json.loads(response.json()["response"])
+            if not isinstance(parsed, dict):
+                raise ValueError("LLM output is not a JSON object")
+
+            declared_goal = str(parsed["declared_goal"]).strip()
+            amount = parsed["amount"]
+            destination = str(parsed["destination"]).strip()
+            # The model is untrusted: only accept an integer micro-ALGO amount.
+            # Reject floats (silent truncation), negative and zero amounts, and
+            # empty strings, then degrade to rules rather than pay on garbage.
+            if not declared_goal or not destination:
+                raise ValueError("LLM output has empty goal or destination")
+            if not isinstance(amount, int) or isinstance(amount, bool):
+                raise ValueError(f"LLM amount is not an integer: {amount!r}")
+            if amount <= 0:
+                raise ValueError(f"LLM amount must be positive: {amount}")
+
             return ProposedPayment(
-                declared_goal=str(parsed["declared_goal"])[:256],
-                amount=int(parsed["amount"]),
-                destination=str(parsed["destination"]),
+                declared_goal=declared_goal[:256],
+                amount=amount,
+                destination=destination,
                 derived_from="local_llm",
             )
         except Exception as e:

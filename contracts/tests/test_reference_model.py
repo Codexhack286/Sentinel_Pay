@@ -252,6 +252,18 @@ def test_payment_that_rekeys_the_sender_is_rejected(signer, logic):
     assert "rekeys" in msg
 
 
+def test_app_call_that_rekeys_the_sender_is_rejected(signer, logic):
+    """The app call leg must not rekey either; the contract asserts this too."""
+    attestation = make_attestation(signer)
+    call = app_call(attestation)
+    call["rekey_to"] = ATTACKER_PUBKEY
+
+    ok, msg = logic.validate_atomic_group(payment(), call)
+
+    assert ok is False
+    assert "rekeys" in msg
+
+
 def test_wrong_selector_is_rejected(signer, logic):
     attestation = make_attestation(signer)
     call = app_call(attestation)

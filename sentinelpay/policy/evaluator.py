@@ -1,5 +1,6 @@
 """Policy evaluator executing deterministic checks against payment intent."""
 
+import threading
 import time
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
@@ -33,6 +34,9 @@ class PolicyEvaluator:
     def __init__(self, cumulative_spend_tracker: Optional[Dict[str, List[Tuple[int, int]]]] = None):
         # {agent_id: [(unix_timestamp, amount), ...]}
         self._spend_log: Dict[str, List[Tuple[int, int]]] = cumulative_spend_tracker or {}
+        # The tracker is shared by every thread that shares an agent/gateway;
+        # the prune (read) and record (write) paths must not interleave.
+        self._spend_lock = threading.Lock()
 
     def _prune(self, agent_id: str, window_seconds: int, now: int) -> List[Tuple[int, int]]:
         cutoff = now - window_seconds
@@ -41,10 +45,14 @@ class PolicyEvaluator:
         return entries
 
     def get_cumulative_spend(self, agent_id: str, window_seconds: int = 86_400) -> int:
-        return sum(amt for _, amt in self._prune(agent_id, window_seconds, int(time.time())))
+        with self._spend_lock:
+            return sum(
+                amt for _, amt in self._prune(agent_id, window_seconds, int(time.time()))
+            )
 
     def record_spend(self, agent_id: str, amount: int) -> None:
-        self._spend_log.setdefault(agent_id, []).append((int(time.time()), amount))
+        with self._spend_lock:
+            self._spend_log.setdefault(agent_id, []).append((int(time.time()), amount))
 
     @traceable(name="policy_evaluator_evaluate", tags=["sentinelpay", "policy"], metadata={"component": "policy"})
     def evaluate(self, intent: "CanonicalIntent", policy: AgentPolicy) -> PolicyEvaluationResult:

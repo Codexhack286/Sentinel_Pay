@@ -131,3 +131,80 @@ def test_ollama_planner_parses_a_well_formed_response(monkeypatch):
     assert proposal.amount == 90_000
     assert proposal.destination == "PAYEE_ADDR"
     assert proposal.derived_from == "local_llm"
+
+
+def test_ollama_planner_rejects_a_negative_amount(monkeypatch):
+    """The model is untrusted; a negative amount must not reach the gateway."""
+    import httpx
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "response": (
+                    '{"declared_goal": "Buy the solar dataset", '
+                    '"amount": -500, "destination": "PAYEE_ADDR"}'
+                )
+            }
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: FakeResponse())
+
+    proposal = OllamaPlanner().propose_payment(
+        objective="Research solar", tool_output={"content": BENIGN}, default_destination="X"
+    )
+
+    assert proposal.derived_from != "local_llm"
+    assert proposal.amount > 0
+
+
+def test_ollama_planner_rejects_a_float_amount(monkeypatch):
+    """A float (e.g. "90000.7") must not be silently truncated."""
+    import httpx
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "response": (
+                    '{"declared_goal": "Buy the solar dataset", '
+                    '"amount": 90000.7, "destination": "PAYEE_ADDR"}'
+                )
+            }
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: FakeResponse())
+
+    proposal = OllamaPlanner().propose_payment(
+        objective="Research solar", tool_output={"content": BENIGN}, default_destination="X"
+    )
+
+    assert proposal.derived_from != "local_llm"
+
+
+def test_ollama_planner_rejects_missing_fields(monkeypatch):
+    """A response missing declared_goal or destination must fall back to rules."""
+    import httpx
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"response": '{"amount": 90000}'}
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: FakeResponse())
+
+    proposal = OllamaPlanner().propose_payment(
+        objective="Research solar", tool_output={"content": BENIGN}, default_destination="X"
+    )
+
+    assert proposal.derived_from != "local_llm"

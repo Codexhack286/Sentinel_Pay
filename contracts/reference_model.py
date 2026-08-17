@@ -114,6 +114,8 @@ class SentinelPayContractLogic:
             return False, "Payment closes out the sender's account; rejected."
         if payment_tx.get("rekey_to"):
             return False, "Payment rekeys the sender's account; rejected."
+        if app_call_tx.get("rekey_to"):
+            return False, "App call rekeys the sender's account; rejected."
 
         # Invariant 2: signature over the whole blob.
         if not AttestationSigner._verify_raw(

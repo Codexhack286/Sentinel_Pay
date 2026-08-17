@@ -5,6 +5,7 @@ The node calls the existing ``DeepAgent.run()`` and returns the resulting
 are untouched and stay observable through the @traceable decorators.
 """
 
+import threading
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -42,19 +43,21 @@ def _default_policy() -> AgentPolicy:
 
 
 _agent: DeepAgent | None = None
+_agent_lock = threading.Lock()
 
 
 def _build_agent() -> DeepAgent:
     global _agent
-    if _agent is None:
-        _agent = DeepAgent(
-            agent_id=AGENT_ID,
-            policy=_default_policy(),
-            gateway=SentinelPayGateway(verifier=LocalSemanticVerifier()),
-            planner=build_planner(settings.MODEL_PROVIDER, settings.MODEL_NAME),
-            resource_owner=settings.RESOURCE_OWNER_ADDRESS,
-        )
-    return _agent
+    with _agent_lock:
+        if _agent is None:
+            _agent = DeepAgent(
+                agent_id=AGENT_ID,
+                policy=_default_policy(),
+                gateway=SentinelPayGateway(verifier=LocalSemanticVerifier()),
+                planner=build_planner(settings.MODEL_PROVIDER, settings.MODEL_NAME),
+                resource_owner=settings.RESOURCE_OWNER_ADDRESS,
+            )
+        return _agent
 
 
 def run_deep_agent(state: AgentState) -> AgentState:
