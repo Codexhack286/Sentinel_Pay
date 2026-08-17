@@ -35,8 +35,8 @@ Expected: `rich` and `markdown-it-py`, `pygments`, `mdurl` resolve and install.
 
 - [ ] **Step 2: Verify import**
 
-Run: `uv run python -c "import rich; print(rich.__version__)"`
-Expected: prints a version.
+Run: `uv run python -c "from importlib.metadata import version; print(version('rich'))"`
+Expected: prints a version (rich 15.x removed the `__version__` attribute).
 
 - [ ] **Step 3: Commit**
 
@@ -468,7 +468,9 @@ def _scene_panel(report: ScenarioReport) -> Panel:
     table.add_row(f"  {report.atomic_group.tx2}")
     table.add_row(f"[bold]Nonce:[/bold] {report.atomic_group.nonce[:16]}...")
     table.add_row("")
-    table.add_row(f"[bold]Verdict:[/bold] {_verdict_label(report)}")
+    verdict_row = Text.from_markup("[bold]Verdict:[/bold] ")
+    verdict_row.append_text(_verdict_label(report))
+    table.add_row(verdict_row)
     if report.explorer_link:
         table.add_row(f"[bold]Explorer:[/bold] [link={report.explorer_link}]{report.explorer_link}[/link]")
 
@@ -708,7 +710,7 @@ Expected: 172 passed.
 Run: `uv run python scripts/run_visualizer.py`
 Expected: two panels render, verdicts colored.
 
-Run: `uv run python -c "from fastapi.testclient import TestClient; from services.api.app import app; c=TestClient(app); r=c.get('/visualize'); print(r.status_code, r.headers['content-type']); assert 'BLOCKED BY POLICY' in r.text"`
+Run: `uv run python -c "from fastapi.testclient import TestClient; from services.api.app import app; c=TestClient(app); r=c.get('/visualize'); print(r.status_code, r.headers['content-type']); assert 'AUTHORIZED' in r.text and 'DENIED' in r.text"`
 Expected: `200 text/html; charset=utf-8`.
 
 - [ ] **Step 5: Confirm clean tree and commit**
