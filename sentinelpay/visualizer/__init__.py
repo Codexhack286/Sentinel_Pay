@@ -1,0 +1,1 @@
+"""SentinelPay visualizer: terminal and web renderers for the demo scenes."""
