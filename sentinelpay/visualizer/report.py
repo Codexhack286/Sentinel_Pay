@@ -7,6 +7,7 @@ only consume this model; they never compute. No network I/O happens here.
 
 import base64
 from typing import List, Optional
+from urllib.parse import quote
 
 from algosdk import transaction
 from pydantic import BaseModel, Field
@@ -120,7 +121,11 @@ def _explorer_link(attestation) -> str:
         group_id = transaction.calculate_group_id(group)
     except Exception:
         return ""
-    return EXPLORER_TMPL.format(group_id=base64.b64encode(group_id).decode())
+    # calculate_group_id returns raw bytes; the explorer expects base64.
+    # URL-encode the group id: base64 uses path-unsafe "/" and "+" characters.
+    return EXPLORER_TMPL.format(
+        group_id=quote(base64.b64encode(group_id).decode(), safe="")
+    )
 
 
 def _reasoning(log: AgentExecutionLog) -> ScenarioReasoning:

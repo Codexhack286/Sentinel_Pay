@@ -17,7 +17,11 @@ def test_scene_a_report_is_authorized():
     # A real configured payee yields a group id; the placeholder (offline demo
     # default) degrades to an empty link rather than crashing.
     if report.explorer_link:
-        assert report.explorer_link.startswith("https://testnet.explorer.perawallet.app/group/")
+        prefix = "https://testnet.explorer.perawallet.app/group/"
+        assert report.explorer_link.startswith(prefix)
+        # The base64 group id is URL-encoded: no path-unsafe characters remain.
+        group_id = report.explorer_link[len(prefix):]
+        assert not any(c in group_id for c in "/+=")
 
 
 def test_scene_b_report_is_blocked_by_policy():
