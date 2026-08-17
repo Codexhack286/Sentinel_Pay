@@ -137,6 +137,8 @@ Apps `769239295` / `769240052` are the vulnerable revision and must not be reuse
 - [x] Deterministic Deep Agent harness with no wallet-signing privileges
 - [x] Free vs SentinelPay-gated tool boundary
 - [x] Skills and subagent specs
+- [x] Single-node LangGraph wrap (`agent/graph.py` + `langgraph.json`) exposing
+      `DeepAgent` to LangSmith Deployments without rewriting the harness
 
 ### Contracts & scripts
 - [x] Deployable AVM v8 PyTeal program with box-backed replay protection
@@ -205,6 +207,7 @@ Apps `769239295` / `769240052` are the vulnerable revision and must not be reuse
 | Execution | Facilitator `/verify` + `/settle` path | 🟡 P1 | Medium | Optional; box check already binds acceptance |
 | Security | Embeddings-based verifier | 🟡 P1 | Low | Not started |
 | AI Agent | Local LLM dynamic tool calling | 🟡 P1 | Medium | ✅ Optional Ollama planner |
+| Deployment | LangGraph wrap for LangSmith | 🟡 P1 | Low | ✅ Done |
 | Contract | ASA/USDC support, nonce pruning | 🟡 P1 | Medium | Not started |
 | Presentation | Demo visualizer, video, slides | 🟢 P2 | Medium | Not started |
 | Competition | MainNet deployment and entry | 🟢 P3 | Low | Pending TestNet sign-off |

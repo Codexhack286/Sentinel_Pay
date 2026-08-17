@@ -208,6 +208,27 @@ trace to see the full `deep_agent_run → plan_task → free_research_tool_execu
 propose_payment → sentinelpay_gateway_process_payment_request → policy/verifier`
 pipeline, its inputs/outputs, and per-step timing.
 
+### Deploy the Agent as a LangGraph (optional)
+
+`DeepAgent` is wrapped as a single-node compiled LangGraph at `agent/graph.py`,
+so the exact same harness (planning, tools, SentinelPay gateway, policy and
+verifier) can run inside LangSmith Deployments without rewriting any internals.
+The graph input is `{"user_objective": "...", "simulate_attack": false}` and the
+output is an `AgentExecutionLog`.
+
+```bash
+# Local dev server (no deploy needed)
+uv run --with langgraph-cli[inmem] langgraph dev
+
+# Deploy to LangSmith (builds from langgraph.json, uploads, creates a deployment)
+uv tool install langgraph-cli
+langgraph deploy --name sentinelpay-agent
+```
+
+The deployment is reachable over HTTP at `/invoke` (POST) with the graph state
+above. Once deployed, traces appear automatically in the deployment's LangSmith
+project.
+
 ### Starting the x402 Resource API
 
 ```bash
