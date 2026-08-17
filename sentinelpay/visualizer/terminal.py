@@ -5,6 +5,7 @@ color-coding the firewall verdict so the demo reads at a glance.
 """
 
 import io
+import sys
 from typing import Sequence
 
 from rich.console import Console, Group
@@ -84,6 +85,7 @@ def render_scenarios(reports: Sequence[ScenarioReport]) -> str:
 
 
 def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8")
     reports = [
         build_scenario_report(False),
         build_scenario_report(True),
