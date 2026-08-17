@@ -16,6 +16,7 @@ dependencies = [
     "pyteal>=0.27.0",
     "langsmith>=0.11.0",
     "langgraph>=1.2.11",
+    "rich>=15.0.0",
 ]
 
 # Single source of dev dependencies. There used to be a second, differently
