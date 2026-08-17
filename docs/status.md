@@ -16,7 +16,7 @@ as the payment.
 
 **Current state**: engine, agent runtime, contract (both the deployable PyTeal
 program and the reference model), services, adversarial test matrix and demo
-flows are implemented and green — **166/166 tests passing**, all offline.
+flows are implemented and green — **172/172 tests passing**, all offline.
 
 A security review found the previously deployed contract did not bind the
 enforced fields to the signed attestation. **Fixed, redeployed, and verified
@@ -149,7 +149,7 @@ Apps `769239295` / `769240052` are the vulnerable revision and must not be reuse
 - [x] x402 resource endpoint (402 challenge → proof validation → data)
 - [x] Standalone verifier node
 
-### Tests — 166 passing
+### Tests — 172 passing
 - [x] Unit: policy, intent, attestation (JSON + AVM), verifier, keys, x402
       handler, gateway, verifier service, facilitator payloads, group builder
 - [x] Integration: full x402 payment flow
@@ -187,7 +187,7 @@ Apps `769239295` / `769240052` are the vulnerable revision and must not be reuse
 - [ ] Nonce box pruning to reclaim MBR after expiry
 
 ### P2 — Presentation
-- [ ] Terminal or web visualizer: prompt → reasoning → firewall decision →
+- [x] Terminal or web visualizer: prompt → reasoning → firewall decision →
       atomic group → explorer link, Scene A beside Scene B
 - [ ] 2–3 minute demo video and slides
 
@@ -209,5 +209,5 @@ Apps `769239295` / `769240052` are the vulnerable revision and must not be reuse
 | AI Agent | Local LLM dynamic tool calling | 🟡 P1 | Medium | ✅ Optional Ollama planner |
 | Deployment | LangGraph wrap for LangSmith | 🟡 P1 | Low | ✅ Done |
 | Contract | ASA/USDC support, nonce pruning | 🟡 P1 | Medium | Not started |
-| Presentation | Demo visualizer, video, slides | 🟢 P2 | Medium | Not started |
+| Presentation | Demo visualizer, video, slides | 🟢 P2 | Medium | ✅ Done |
 | Competition | MainNet deployment and entry | 🟢 P3 | Low | Pending TestNet sign-off |

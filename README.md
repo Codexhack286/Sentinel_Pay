@@ -188,6 +188,14 @@ uv run python examples/prompt_injection_flow.py
 uv run python scripts/run_demo.py
 ```
 
+```bash
+# Render both scenes in the terminal visualizer
+uv run python scripts/run_visualizer.py
+
+# Or view the same pipeline as a web page (then open http://127.0.0.1:8000/visualize)
+uv run python -m services.api.app
+```
+
 ### LangSmith Tracing (optional)
 
 Core payment and agent paths are decorated with LangSmith `@traceable`, so every
