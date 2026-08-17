@@ -15,6 +15,7 @@ sentinelpay/payments/settlement.py.
 """
 
 import logging
+from html import escape
 from typing import Optional, Set
 
 from fastapi import FastAPI, Header, HTTPException, Response, status
@@ -176,6 +177,77 @@ def get_paid_dataset(
             ],
         },
     }
+
+
+def _scene_html(title: str, report) -> str:
+    verdict_class = "ok" if report.verdict == "authorized" else "blocked"
+    attestation = f"<p><b>Attestation:</b> {escape(report.firewall.attestation_id or '')}</p>"
+    explorer = (
+        f'<p><a href="{report.explorer_link}" target="_blank">View group on TestNet explorer</a></p>'
+        if report.explorer_link
+        else ""
+    )
+    return f"""
+    <section class="scene {report.scene.lower()}">
+      <h2>{title}</h2>
+      <p><b>Objective:</b> {escape(report.objective)}</p>
+      <h3>Reasoning</h3>
+      <p><b>Query:</b> {escape(report.reasoning.tool_query)}</p>
+      <p>{escape(report.reasoning.tool_result[:200])}</p>
+      <h3>Plan</h3>
+      <ul>{''.join(f'<li>{escape(s)}</li>' for s in report.reasoning.plan_steps)}</ul>
+      <p><b>Proposed payment:</b> {report.reasoning.proposal_amount} uALGO &rarr;
+         {escape(report.reasoning.proposal_destination[:16])}...
+         <em>{escape(report.reasoning.proposal_derived_from)}</em></p>
+      <h3>Firewall decision</h3>
+      <p class="verdict {verdict_class}"><b>{escape(report.firewall.status.upper())}</b></p>
+      <p>{escape(report.firewall.reason)}</p>
+      <p>Checks passed: {len(report.firewall.checks_passed)} &middot;
+         Checks failed: {len(report.firewall.checks_failed)}</p>
+      {attestation}
+      <h3>Atomic group</h3>
+      <ul>
+        <li>{escape(report.atomic_group.tx0)}</li>
+        <li>{escape(report.atomic_group.tx1)}</li>
+        <li>{escape(report.atomic_group.tx2)}</li>
+      </ul>
+      <p><b>Nonce:</b> {escape(report.atomic_group.nonce[:16])}...</p>
+      <p><b>Verdict:</b> <span class="verdict {verdict_class}">{escape(report.verdict)}</span></p>
+      {explorer}
+    </section>
+    """
+
+
+@app.get("/visualize", response_class=Response)
+def visualize():
+    """HTML page rendering Scene A and Scene B side by side."""
+    from sentinelpay.visualizer.report import build_scenario_report
+
+    scene_a = build_scenario_report(False)
+    scene_b = build_scenario_report(True)
+    html = f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>SentinelPay Visualizer</title>
+<style>
+  body {{ font-family: system-ui, sans-serif; margin: 2rem; background: #0f172a; color: #e2e8f0; }}
+  h1 {{ text-align: center; }}
+  .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }}
+  .scene {{ border: 2px solid #334155; border-radius: 8px; padding: 1rem 1.5rem; background: #1e293b; }}
+  .scene.a {{ border-color: #22c55e; }}
+  .scene.b {{ border-color: #ef4444; }}
+  .verdict {{ font-weight: bold; }}
+  .verdict.ok {{ color: #4ade80; }}
+  .verdict.blocked {{ color: #f87171; }}
+  a {{ color: #60a5fa; }}
+</style></head>
+<body>
+  <h1>SentinelPay — Firewall Visualizer</h1>
+  <p style="text-align:center">offline demo (no chain access)</p>
+  <div class="grid">
+    {_scene_html("Scene A — Legitimate flow", scene_a)}
+    {_scene_html("Scene B — Prompt injection", scene_b)}
+  </div>
+</body></html>"""
+    return Response(content=html, media_type="text/html")
 
 
 if __name__ == "__main__":
