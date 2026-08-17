@@ -217,14 +217,15 @@ def _build_agent() -> DeepAgent:
 
 def _suggested_params() -> transaction.SuggestedParams:
     # Deterministic: fixed round windows and fee so the offline group id is
-    # stable across runs. Only used for display; never submitted.
+    # stable within a report. Only used for display; never submitted.
+    # (algosdk 2.x uses positional first/last and gh; v1-era kwarg names raise.)
     return transaction.SuggestedParams(
-        first_valid=1_000_000,
-        last_valid=1_001_000,
         fee=1_000,
+        first=1_000_000,
+        last=1_001_000,
+        gh=base64.b64encode(_TESTNET_GENESIS_HASH).decode(),
+        gen=_TESTNET_GENESIS_ID,
         flat_fee=True,
-        genesis_id=_TESTNET_GENESIS_ID,
-        genesis_hash=_TESTNET_GENESIS_HASH,
     )
 
 
@@ -244,7 +245,8 @@ def _explorer_link(attestation) -> str:
         group_id = transaction.calculate_group_id(group)
     except Exception:
         return ""
-    return EXPLORER_TMPL.format(group_id=group_id.decode("utf-8"))
+    # calculate_group_id returns raw bytes; the explorer expects base64.
+    return EXPLORER_TMPL.format(group_id=base64.b64encode(group_id).decode())
 
 
 def _reasoning(log: AgentExecutionLog) -> ScenarioReasoning:
