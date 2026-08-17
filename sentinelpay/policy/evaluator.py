@@ -14,6 +14,7 @@ from sentinelpay.policy.rules import (
     check_per_transaction_limit,
     check_tool_allowed,
 )
+from sentinelpay.tracing import traceable
 
 if TYPE_CHECKING:
     from sentinelpay.intent.models import CanonicalIntent
@@ -45,6 +46,7 @@ class PolicyEvaluator:
     def record_spend(self, agent_id: str, amount: int) -> None:
         self._spend_log.setdefault(agent_id, []).append((int(time.time()), amount))
 
+    @traceable(name="policy_evaluator_evaluate", tags=["sentinelpay", "policy"], metadata={"component": "policy"})
     def evaluate(self, intent: "CanonicalIntent", policy: AgentPolicy) -> PolicyEvaluationResult:
         checks_passed: List[str] = []
         checks_failed: List[str] = []

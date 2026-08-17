@@ -11,6 +11,7 @@ from sentinelpay.policy.evaluator import PolicyEvaluator
 from sentinelpay.policy.models import AgentPolicy, PolicyDecision
 from sentinelpay.verifier.attestation import Attestation
 from sentinelpay.verifier.verifier import IntentVerifier, LocalSemanticVerifier
+from sentinelpay.tracing import traceable
 
 
 class GatewayResponse(BaseModel):
@@ -42,6 +43,7 @@ class SentinelPayGateway:
         self.policy_evaluator = policy_evaluator or PolicyEvaluator()
         self.verifier = verifier or LocalSemanticVerifier()
 
+    @traceable(name="sentinelpay_gateway_process_payment_request", tags=["sentinelpay", "gateway"], metadata={"component": "gateway"})
     def process_payment_request(
         self,
         intent: PaymentIntent,

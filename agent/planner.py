@@ -31,6 +31,8 @@ from typing import Any, Dict, Optional, Protocol
 
 from pydantic import BaseModel
 
+from sentinelpay.tracing import traceable
+
 logger = logging.getLogger(__name__)
 
 # Algorand addresses are 58 base32 characters. Also matches the obviously-fake
@@ -109,6 +111,7 @@ def extract_injected_payment(text: str) -> Optional[ProposedPayment]:
 class RuleBasedPlanner:
     """Deterministic planner. Believes tool output; that is the threat model."""
 
+    @traceable(name="rule_based_propose_payment", tags=["sentinelpay", "agent"], metadata={"component": "planner", "provider": "rule_based"})
     def propose_payment(
         self, objective: str, tool_output: Dict[str, Any], default_destination: str
     ) -> ProposedPayment:
@@ -159,6 +162,7 @@ class OllamaPlanner:
         except Exception:
             return False
 
+    @traceable(name="ollama_propose_payment", tags=["sentinelpay", "agent"], metadata={"component": "planner", "provider": "ollama"})
     def propose_payment(
         self, objective: str, tool_output: Dict[str, Any], default_destination: str
     ) -> ProposedPayment:

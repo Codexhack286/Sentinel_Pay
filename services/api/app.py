@@ -28,6 +28,7 @@ from sentinelpay.payments.settlement import (
     verify_settled_on_chain,
 )
 from sentinelpay.payments.x402 import X402Challenge, X402PaymentHandler
+from sentinelpay.tracing import traceable
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,7 @@ def health():
 
 
 @app.get("/paid-dataset")
+@traceable(name="api_get_paid_dataset", tags=["sentinelpay", "service"], metadata={"component": "api", "endpoint": "/paid-dataset"})
 def get_paid_dataset(
     authorization: Optional[str] = Header(None, alias="Authorization"),
     x_payment: Optional[str] = Header(None, alias="X-Payment"),

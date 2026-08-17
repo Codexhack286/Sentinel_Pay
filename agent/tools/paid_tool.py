@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional
 from sentinelpay.intent.models import PaymentIntent
 from sentinelpay.policy.models import AgentPolicy
 from sentinelpay.gateway.middleware import SentinelPayGateway, GatewayResponse
+from sentinelpay.tracing import traceable
 
 
 class PaidResearchTool:
@@ -18,6 +19,7 @@ class PaidResearchTool:
         self.gateway = gateway
         self.policy = policy
 
+    @traceable(name="paid_research_tool_request_payment_intent", tags=["sentinelpay", "agent"], metadata={"component": "tool", "tool": "paid_research"})
     def request_payment_intent(
         self,
         agent_id: str,

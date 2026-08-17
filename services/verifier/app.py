@@ -12,6 +12,7 @@ from sentinelpay.gateway.middleware import GatewayResponse, SentinelPayGateway
 from sentinelpay.intent.models import PaymentIntent
 from sentinelpay.keys import load_signer
 from sentinelpay.policy.models import AgentPolicy
+from sentinelpay.tracing import traceable
 from sentinelpay.verifier.verifier import LocalSemanticVerifier
 
 app = FastAPI(
@@ -40,6 +41,7 @@ def health():
 
 
 @app.post("/verify", response_model=GatewayResponse)
+@traceable(name="verifier_service_verify_payment", tags=["sentinelpay", "service"], metadata={"component": "verifier_service"})
 def verify_payment(req: VerificationRequest) -> GatewayResponse:
     """Evaluate a payment intent against policy and return authorization or denial."""
     return gateway.process_payment_request(req.intent, req.policy)

@@ -188,6 +188,26 @@ uv run python examples/prompt_injection_flow.py
 uv run python scripts/run_demo.py
 ```
 
+### LangSmith Tracing (optional)
+
+Core payment and agent paths are decorated with LangSmith `@traceable`, so every
+run (agent planning, tool calls, gateway checks, policy evaluation, verification,
+x402 endpoints) shows up as a trace tree.
+
+```bash
+# Enable: set a key (and optionally a project). Copy from .env.example:
+LANGSMITH_API_KEY=lsv2_pt_...      # enables tracing
+LANGSMITH_PROJECT=sentinelpay      # default project when unset
+LANGSMITH_TRACING=false            # force off for a single run, key or not
+```
+
+With `LANGSMITH_API_KEY` set, tracing turns on automatically; the decorators are
+transparent no-ops when no key is present. Each run of a decorated function
+appears as a nested trace in your project at https://smith.langchain.com — open a
+trace to see the full `deep_agent_run → plan_task → free_research_tool_execute →
+propose_payment → sentinelpay_gateway_process_payment_request → policy/verifier`
+pipeline, its inputs/outputs, and per-step timing.
+
 ### Starting the x402 Resource API
 
 ```bash

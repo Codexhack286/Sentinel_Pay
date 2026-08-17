@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from sentinelpay.intent.models import CanonicalIntent
 from sentinelpay.policy.models import AgentPolicy, PolicyDecision
+from sentinelpay.tracing import traceable
 from sentinelpay.verifier.attestation import Attestation, AttestationSigner, to_32_bytes
 
 # Phrases that only ever appear when something is trying to talk the agent out
@@ -176,6 +177,7 @@ class LocalSemanticVerifier:
             f"({len(overlap)} shared terms, {required} required)."
         )
 
+    @traceable(name="local_semantic_verifier_verify", tags=["sentinelpay", "verifier"], metadata={"component": "verifier", "verifier": "local_semantic"})
     def verify(
         self,
         intent: CanonicalIntent,

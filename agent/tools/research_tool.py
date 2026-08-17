@@ -2,6 +2,8 @@
 
 from typing import Dict, Any
 
+from sentinelpay.tracing import traceable
+
 
 class FreeResearchTool:
     """Standard research tool that queries free public information."""
@@ -10,6 +12,7 @@ class FreeResearchTool:
         self.name = "free_research"
         self.description = "Query open datasets and web summaries."
 
+    @traceable(name="free_research_tool_execute", tags=["sentinelpay", "agent"], metadata={"component": "tool", "tool": "free_research"})
     def execute(self, query: str) -> Dict[str, Any]:
         """Simulates querying free research sources."""
         # Simulated responses for demo scenarios

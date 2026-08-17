@@ -25,8 +25,11 @@ class Settings(BaseSettings):
     MODEL_PROVIDER: str = "local"
     MODEL_NAME: str = "llama3.2:3b"
 
-    # Optional LangSmith
+    # Optional LangSmith. A key enables tracing automatically (see
+    # sentinelpay.tracing); LANGSMITH_TRACING and LANGSMITH_PROJECT tune it.
     LANGSMITH_API_KEY: Optional[str] = None
+    LANGSMITH_TRACING: bool = False
+    LANGSMITH_PROJECT: Optional[str] = None
 
     # Algorand TestNet Config
     ALGOD_ADDRESS: str = "https://testnet-api.algonode.cloud"

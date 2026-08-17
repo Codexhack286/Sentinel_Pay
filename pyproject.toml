@@ -14,6 +14,7 @@ dependencies = [
     "cryptography>=42.0.0",
     "py-algorand-sdk>=2.5.0",
     "pyteal>=0.27.0",
+    "langsmith>=0.11.0",
 ]
 
 # Single source of dev dependencies. There used to be a second, differently

@@ -9,6 +9,7 @@ from agent.tools.paid_tool import PaidResearchTool
 from agent.tools.research_tool import FreeResearchTool
 from sentinelpay.gateway.middleware import SentinelPayGateway
 from sentinelpay.policy.models import AgentPolicy
+from sentinelpay.tracing import traceable
 
 # Where a legitimate purchase is expected to go. Overridable per instance so the
 # demos and the live TestNet run can point at a real payee.
@@ -65,6 +66,7 @@ class DeepAgent:
         self.free_tool = FreeResearchTool()
         self.paid_tool = PaidResearchTool(gateway=gateway, policy=policy)
 
+    @traceable(name="deep_agent_plan_task", tags=["sentinelpay", "agent"], metadata={"component": "agent"})
     def plan_task(self, user_objective: str, max_budget_micro_units: int = 100_000) -> TaskPlan:
         """Generate a structured task breakdown from the user objective."""
         return TaskPlan(
@@ -79,6 +81,7 @@ class DeepAgent:
             required_tools=["free_research", "paid_research"],
         )
 
+    @traceable(name="deep_agent_run", tags=["sentinelpay", "agent"], metadata={"component": "agent"})
     def run(self, user_objective: str, simulate_attack: bool = False) -> AgentExecutionLog:
         """Execute the objective through planning and tool use.
 
